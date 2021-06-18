@@ -14,6 +14,8 @@ Implementation of padding layer, which adds paddings to input blob.
 #include "../op_cuda.hpp"
 #include "../op_halide.hpp"
 #include "../op_inf_engine.hpp"
+#include "../ie_ngraph.hpp"
+
 #include <vector>
 
 #ifdef HAVE_CUDA
@@ -100,10 +102,14 @@ public:
     virtual bool supportBackend(int backendId) CV_OVERRIDE
     {
 #ifdef HAVE_INF_ENGINE
-        if (backendId == DNN_BACKEND_INFERENCE_ENGINE)
-            return INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2019R1) &&
-                   (preferableTarget != DNN_TARGET_MYRIAD ||
-                    (dstRanges.size() == 4 && paddings[0].first == 0 && paddings[0].second == 0));
+        if (backendId == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019 || backendId == DNN_BACKEND_INFERENCE_ENGINE_NGRAPH)
+        {
+            bool isMyriad = preferableTarget == DNN_TARGET_MYRIAD || preferableTarget == DNN_TARGET_HDDL;
+            if (INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2019R1) && isMyriad)
+                return dstRanges.size() == 4 && paddings[0].first == 0 && paddings[0].second == 0;
+
+            return (dstRanges.size() <= 4 || !isArmComputePlugin());
+        }
 #endif
         return backendId == DNN_BACKEND_OPENCV ||
                backendId == DNN_BACKEND_CUDA ||
@@ -210,7 +216,7 @@ public:
         return Ptr<BackendNode>();
     }
 
-#ifdef HAVE_INF_ENGINE
+#ifdef HAVE_DNN_IE_NN_BUILDER_2019
     virtual Ptr<BackendNode> initInfEngine(const std::vector<Ptr<BackendWrapper> >&) CV_OVERRIDE
     {
         InferenceEngine::Builder::Layer ieLayer(name);
@@ -232,6 +238,29 @@ public:
         ieLayer.setInputPorts(std::vector<InferenceEngine::Port>(1));
         ieLayer.setOutputPorts(std::vector<InferenceEngine::Port>(1));
         return Ptr<BackendNode>(new InfEngineBackendNode(ieLayer));
+    }
+#endif
+
+#ifdef HAVE_DNN_NGRAPH
+    virtual Ptr<BackendNode> initNgraph(const std::vector<Ptr<BackendWrapper> >& inputs,
+                                        const std::vector<Ptr<BackendNode> >& nodes) CV_OVERRIDE
+    {
+        auto& ieInpNode = nodes[0].dynamicCast<InfEngineNgraphNode>()->node;
+        std::vector<int64_t> begins(paddings.size(), 0), ends(paddings.size(), 0);
+        for (int i = 0; i < paddings.size(); ++i)
+        {
+            begins[i] = static_cast<int64_t>(paddings[i].first);
+            ends[i]   = static_cast<int64_t>(paddings[i].second);
+        }
+        auto padding_below = std::make_shared<ngraph::op::Constant>(ngraph::element::i64, ngraph::Shape{begins.size()}, begins.data());
+        auto padding_above = std::make_shared<ngraph::op::Constant>(ngraph::element::i64, ngraph::Shape{ends.size()}, ends.data());
+        auto pad_mode = paddingType == "constant" ? ngraph::op::PadMode::CONSTANT : ngraph::op::PadMode::REFLECT; // SYMMETRIC
+        auto arg_pad_value = std::make_shared<ngraph::op::Constant>(ngraph::element::f32, ngraph::Shape{}, &paddingValue);;
+
+        auto pad = paddingType == "constant" ?
+             std::make_shared<ngraph::op::v1::Pad>(ieInpNode, padding_below, padding_above, arg_pad_value, pad_mode) :
+             std::make_shared<ngraph::op::v1::Pad>(ieInpNode, padding_below, padding_above, pad_mode);
+        return Ptr<BackendNode>(new InfEngineNgraphNode(pad));
     }
 #endif
 

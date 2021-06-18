@@ -750,9 +750,9 @@ pyrDown_( const Mat& _src, Mat& _dst, int borderType )
     Size ssize = _src.size(), dsize = _dst.size();
     int cn = _src.channels();
 
-    int tabL[CV_CN_MAX*(PD_SZ+2)], tabR[CV_CN_MAX*(PD_SZ+2)];
-    AutoBuffer<int> _tabM(dsize.width*cn);
-    int* tabM = _tabM.data();
+    AutoBuffer<int> _tabM(dsize.width * cn), _tabL(cn * (PD_SZ + 2)),
+        _tabR(cn * (PD_SZ + 2));
+    int *tabM = _tabM.data(), *tabL = _tabL.data(), *tabR = _tabR.data();
 
     CV_Assert( ssize.width > 0 && ssize.height > 0 &&
                std::abs(dsize.width*2 - ssize.width) <= 2 &&
@@ -1078,7 +1078,7 @@ static bool ocl_pyrUp( InputArray _src, OutputArray _dst, const Size& _dsz, int 
     UMat dst = _dst.getUMat();
 
     int float_depth = depth == CV_64F ? CV_64F : CV_32F;
-    const int local_size = 16;
+    const int local_size = channels == 1 ? 16 : 8;
     char cvt[2][50];
     String buildOptions = format(
             "-D T=%s -D FT=%s -D convertToT=%s -D convertToFT=%s%s "
@@ -1092,22 +1092,17 @@ static bool ocl_pyrUp( InputArray _src, OutputArray _dst, const Size& _dsz, int 
     size_t globalThreads[2] = { (size_t)dst.cols, (size_t)dst.rows };
     size_t localThreads[2] = { (size_t)local_size, (size_t)local_size };
     ocl::Kernel k;
-    if (ocl::Device::getDefault().isIntel() && channels == 1)
+    if (type == CV_8UC1 && src.cols % 2 == 0)
     {
-        if (type == CV_8UC1 && src.cols % 2 == 0)
-        {
-            buildOptions.clear();
-            k.create("pyrUp_cols2", ocl::imgproc::pyramid_up_oclsrc, buildOptions);
-            globalThreads[0] = dst.cols/4; globalThreads[1] = dst.rows/2;
-        }
-        else
-        {
-            k.create("pyrUp_unrolled", ocl::imgproc::pyr_up_oclsrc, buildOptions);
-            globalThreads[0] = dst.cols/2; globalThreads[1] = dst.rows/2;
-        }
+        buildOptions.clear();
+        k.create("pyrUp_cols2", ocl::imgproc::pyramid_up_oclsrc, buildOptions);
+        globalThreads[0] = dst.cols/4; globalThreads[1] = dst.rows/2;
     }
     else
-        k.create("pyrUp", ocl::imgproc::pyr_up_oclsrc, buildOptions);
+    {
+        k.create("pyrUp_unrolled", ocl::imgproc::pyr_up_oclsrc, buildOptions);
+        globalThreads[0] = dst.cols/2; globalThreads[1] = dst.rows/2;
+    }
 
     if (k.empty())
         return false;

@@ -180,12 +180,21 @@ using testing::tuple_size;
 using testing::tuple_element;
 
 
-class SkipTestException: public cv::Exception
+namespace details {
+class SkipTestExceptionBase: public cv::Exception
+{
+public:
+    SkipTestExceptionBase(bool handlingTags);
+    SkipTestExceptionBase(const cv::String& message, bool handlingTags);
+};
+}
+
+class SkipTestException: public details::SkipTestExceptionBase
 {
 public:
     int dummy; // workaround for MacOSX Xcode 7.3 bug (don't make class "empty")
-    SkipTestException() : dummy(0) {}
-    SkipTestException(const cv::String& message) : dummy(0) { this->msg = message; }
+    SkipTestException() : details::SkipTestExceptionBase(false), dummy(0) {}
+    SkipTestException(const cv::String& message) : details::SkipTestExceptionBase(message, false), dummy(0) { }
 };
 
 /** Apply tag to the current test
@@ -210,6 +219,8 @@ static inline void applyTestTag(const std::string& tag1, const std::string& tag2
 { applyTestTag_(tag1); applyTestTag_(tag2); applyTestTag_(tag3); checkTestTags(); }
 static inline void applyTestTag(const std::string& tag1, const std::string& tag2, const std::string& tag3, const std::string& tag4)
 { applyTestTag_(tag1); applyTestTag_(tag2); applyTestTag_(tag3); applyTestTag_(tag4); checkTestTags(); }
+static inline void applyTestTag(const std::string& tag1, const std::string& tag2, const std::string& tag3, const std::string& tag4, const std::string& tag5)
+{ applyTestTag_(tag1); applyTestTag_(tag2); applyTestTag_(tag3); applyTestTag_(tag4); applyTestTag_(tag5); checkTestTags(); }
 
 
 /** Append global skip test tags
@@ -315,6 +326,7 @@ Mat calcSobelKernel2D( int dx, int dy, int apertureSize, int origin=0 );
 Mat calcLaplaceKernel2D( int aperture_size );
 
 void initUndistortMap( const Mat& a, const Mat& k, const Mat& R, const Mat& new_a, Size sz, Mat& mapx, Mat& mapy, int map_type );
+void initInverseRectificationMap( const Mat& a, const Mat& k, const Mat& R, const Mat& new_a, Size sz, Mat& mapx, Mat& mapy, int map_type );
 
 void minMaxLoc(const Mat& src, double* minval, double* maxval,
                           vector<int>* minloc, vector<int>* maxloc, const Mat& mask=Mat());

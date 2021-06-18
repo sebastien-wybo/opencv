@@ -8,15 +8,13 @@
 #include "../csl/stream.hpp"
 #include "../csl/tensor.hpp"
 
-#include <cstddef>
-
 namespace cv { namespace dnn { namespace cuda4dnn { namespace kernels {
 
     template <class T>
-    void resize_nn(const csl::Stream& stream, csl::TensorSpan<T> output, csl::TensorView<T> input);
+    void resize_nn(const csl::Stream& stream, csl::TensorSpan<T> output, csl::TensorView<T> input, float scale_y, float scale_x, bool round, bool half_pixel_centers);
 
     template <class T>
-    void resize_bilinear(const csl::Stream& stream, csl::TensorSpan<T> output, csl::TensorView<T> input, float scale_y, float scale_x);
+    void resize_bilinear(const csl::Stream& stream, csl::TensorSpan<T> output, csl::TensorView<T> input, float scale_y, float scale_x, bool half_pixel_centers);
 
 }}}} /* namespace cv::dnn::cuda4dnn::kernels */
 

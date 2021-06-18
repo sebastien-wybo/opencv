@@ -222,7 +222,10 @@ template <typename R> std::ostream & operator<<(std::ostream & out, const Data<R
     return out;
 }
 
-template<typename T> static inline void EXPECT_COMPARE_EQ_(const T a, const T b);
+template<typename T> static inline void EXPECT_COMPARE_EQ_(const T a, const T b)
+{
+    EXPECT_EQ(a, b);
+}
 template<> inline void EXPECT_COMPARE_EQ_<float>(const float a, const float b)
 {
     EXPECT_FLOAT_EQ( a, b );
@@ -335,6 +338,40 @@ template<typename R> struct TheTest
 #if CV_SIMD_64F
         v_float64 vf64 = v_reinterpret_as_f64(r1); out.a.clear(); v_store((double*)out.a.d, vf64); EXPECT_EQ(data.a, out.a);
 #endif
+
+#if CV_SIMD_WIDTH == 16
+        R setall_res1 = v_setall((LaneType)5);
+        R setall_res2 = v_setall<LaneType>(6);
+#elif CV_SIMD_WIDTH == 32
+        R setall_res1 = v256_setall((LaneType)5);
+        R setall_res2 = v256_setall<LaneType>(6);
+#elif CV_SIMD_WIDTH == 64
+        R setall_res1 = v512_setall((LaneType)5);
+        R setall_res2 = v512_setall<LaneType>(6);
+#else
+#error "Configuration error"
+#endif
+#if CV_SIMD_WIDTH > 0
+        Data<R> setall_res1_; v_store(setall_res1_.d, setall_res1);
+        Data<R> setall_res2_; v_store(setall_res2_.d, setall_res2);
+        for (int i = 0; i < R::nlanes; ++i)
+        {
+            SCOPED_TRACE(cv::format("i=%d", i));
+            EXPECT_EQ((LaneType)5, setall_res1_[i]);
+            EXPECT_EQ((LaneType)6, setall_res2_[i]);
+        }
+#endif
+
+        R vx_setall_res1 = vx_setall((LaneType)11);
+        R vx_setall_res2 = vx_setall<LaneType>(12);
+        Data<R> vx_setall_res1_; v_store(vx_setall_res1_.d, vx_setall_res1);
+        Data<R> vx_setall_res2_; v_store(vx_setall_res2_.d, vx_setall_res2);
+        for (int i = 0; i < R::nlanes; ++i)
+        {
+            SCOPED_TRACE(cv::format("i=%d", i));
+            EXPECT_EQ((LaneType)11, vx_setall_res1_[i]);
+            EXPECT_EQ((LaneType)12, vx_setall_res2_[i]);
+        }
 
         return *this;
     }
@@ -540,6 +577,25 @@ template<typename R> struct TheTest
         return *this;
     }
 
+    TheTest & test_mul_hi()
+    {
+        // typedef typename V_RegTraits<R>::w_reg Rx2;
+        Data<R> dataA, dataB(32767);
+        R a = dataA, b = dataB;
+
+        R c = v_mul_hi(a, b);
+
+        Data<R> resC = c;
+        const int n = R::nlanes / 2;
+        for (int i = 0; i < n; ++i)
+        {
+            SCOPED_TRACE(cv::format("i=%d", i));
+            EXPECT_EQ((typename R::lane_type)((dataA[i] * dataB[i]) >> 16), resC[i]);
+        }
+
+        return *this;
+    }
+
     TheTest & test_abs()
     {
         typedef typename V_RegTraits<R>::u_reg Ru;
@@ -708,12 +764,12 @@ template<typename R> struct TheTest
         for (int i = 0; i < n; ++i)
         {
             SCOPED_TRACE(cv::format("i=%d", i));
-            EXPECT_EQ((double)dataA[i*2]     * (double)dataA[i*2] +
-                      (double)dataA[i*2 + 1] * (double)dataA[i*2  + 1], resA[i]);
-            EXPECT_EQ((double)dataB[i*2]     * (double)dataB[i*2] +
-                      (double)dataB[i*2 + 1] * (double)dataB[i*2  + 1], resB[i]);
-            EXPECT_EQ((double)dataA[i*2]     * (double)dataB[i*2] +
-                      (double)dataA[i*2 + 1] * (double)dataB[i*2  + 1] + dataC[i], resC[i]);
+            EXPECT_COMPARE_EQ((double)dataA[i*2]     * (double)dataA[i*2] +
+                              (double)dataA[i*2 + 1] * (double)dataA[i*2  + 1], resA[i]);
+            EXPECT_COMPARE_EQ((double)dataB[i*2]     * (double)dataB[i*2] +
+                              (double)dataB[i*2 + 1] * (double)dataB[i*2  + 1], resB[i]);
+            EXPECT_COMPARE_EQ((double)dataA[i*2]     * (double)dataB[i*2] +
+                              (double)dataA[i*2 + 1] * (double)dataB[i*2  + 1] + dataC[i], resC[i]);
         }
     #endif
         return *this;
@@ -857,13 +913,18 @@ template<typename R> struct TheTest
     TheTest & test_reduce()
     {
         Data<R> dataA;
+        int sum = 0;
+        for (int i = 0; i < R::nlanes; ++i)
+        {
+            sum += (int)(dataA[i]);   // To prevent a constant overflow with int8
+        }
         R a = dataA;
-        EXPECT_EQ((LaneType)1, v_reduce_min(a));
-        EXPECT_EQ((LaneType)R::nlanes, v_reduce_max(a));
-        EXPECT_EQ((LaneType)((1 + R::nlanes)*R::nlanes/2), v_reduce_sum(a));
+        EXPECT_EQ((LaneType)1, (LaneType)v_reduce_min(a));
+        EXPECT_EQ((LaneType)(R::nlanes), (LaneType)v_reduce_max(a));
+        EXPECT_EQ((int)(sum), (int)v_reduce_sum(a));
         dataA[0] += R::nlanes;
         R an = dataA;
-        EXPECT_EQ((LaneType)2, v_reduce_min(an));
+        EXPECT_EQ((LaneType)2, (LaneType)v_reduce_min(an));
         return *this;
     }
 
@@ -1424,7 +1485,7 @@ template<typename R> struct TheTest
         R r1 = vx_load_expand((const cv::float16_t*)data.a.d);
         R r2(r1);
         EXPECT_EQ(1.0f, r1.get0());
-        vx_store(data_f32.a.d, r2);
+        v_store(data_f32.a.d, r2);
         EXPECT_EQ(-2.0f, data_f32.a.d[R::nlanes - 1]);
 
         out.a.clear();
@@ -1551,6 +1612,7 @@ void test_hal_intrin_uint8()
         .test_dotprod_expand()
         .test_min_max()
         .test_absdiff()
+        .test_reduce()
         .test_reduce_sad()
         .test_mask()
         .test_popcount()
@@ -1592,6 +1654,7 @@ void test_hal_intrin_int8()
         .test_absdiff()
         .test_absdiffs()
         .test_abs()
+        .test_reduce()
         .test_reduce_sad()
         .test_mask()
         .test_popcount()
@@ -1619,6 +1682,7 @@ void test_hal_intrin_uint16()
         .test_arithm_wrap()
         .test_mul()
         .test_mul_expand()
+        .test_mul_hi()
         .test_cmp()
         .test_shift<1>()
         .test_shift<8>()
@@ -1653,6 +1717,7 @@ void test_hal_intrin_int16()
         .test_arithm_wrap()
         .test_mul()
         .test_mul_expand()
+        .test_mul_hi()
         .test_cmp()
         .test_shift<1>()
         .test_shift<8>()
@@ -1858,21 +1923,21 @@ void test_hal_intrin_float64()
 #endif
 }
 
-#if CV_FP16
 void test_hal_intrin_float16()
 {
     DUMP_ENTRY(v_float16);
 #if CV_FP16
     TheTest<v_float32>()
         .test_loadstore_fp16_f32()
-#endif
 #if CV_SIMD_FP16
         .test_loadstore_fp16()
         .test_float_cvt_fp16()
 #endif
         ;
-}
+#else
+    std::cout << "SKIP: CV_FP16 is not available" << std::endl;
 #endif
+}
 
 /*#if defined(CV_CPU_DISPATCH_MODE_FP16) && CV_CPU_DISPATCH_MODE == FP16
 void test_hal_intrin_float16()

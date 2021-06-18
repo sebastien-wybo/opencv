@@ -753,7 +753,7 @@ TEST(Core_InputOutput, filestorage_base64_basic_read_YAML)
 {
     test_filestorage_basic(cv::FileStorage::WRITE_BASE64, ".yml", false);
 }
-TEST(Core_InputOutput, DISABLED_filestorage_base64_basic_read_JSON)
+TEST(Core_InputOutput, filestorage_base64_basic_read_JSON)
 {
     test_filestorage_basic(cv::FileStorage::WRITE_BASE64, ".json", false);
 }
@@ -1640,6 +1640,32 @@ TEST(Core_InputOutput, FileStorage_free_file_after_exception)
     ASSERT_EQ(0, std::remove(fileName.c_str()));
 }
 
+TEST(Core_InputOutput, FileStorage_write_to_sequence)
+{
+    const std::vector<std::string> formatExts = { ".yml", ".json", ".xml" };
+    const std::string fileName = "FileStorage_write_to_sequence";
+
+    for (const auto& ext : formatExts)
+    {
+        FileStorage fs(fileName + ext, FileStorage::WRITE);
+        std::vector<int> in = { 23, 42 };
+        fs.startWriteStruct("some_sequence", cv::FileNode::SEQ);
+        for (int i : in)
+            fs.write("", i);
+        fs.endWriteStruct();
+        fs.release();
+
+        FileStorage fsIn(fileName + ext, FileStorage::READ);
+        FileNode seq = fsIn["some_sequence"];
+        FileNodeIterator it = seq.begin(), it_end = seq.end();
+        std::vector<int> out;
+        for (; it != it_end; ++it)
+            out.push_back((int)*it);
+
+        EXPECT_EQ(in, out);
+    }
+}
+
 TEST(Core_InputOutput, FileStorage_YAML_parse_multiple_documents)
 {
     const std::string filename = "FileStorage_YAML_parse_multiple_documents.yml";
@@ -1667,6 +1693,148 @@ TEST(Core_InputOutput, FileStorage_YAML_parse_multiple_documents)
     fs.release();
 
     ASSERT_EQ(0, std::remove(filename.c_str()));
+}
+
+TEST(Core_InputOutput, FileStorage_JSON_VeryLongLines)
+{
+    for( int iter = 0; iter < 2; iter++ )
+    {
+        std::string temp_path = cv::tempfile("temp.json");
+        {
+        std::ofstream ofs(temp_path);
+        ofs << "{     ";
+        int prev_len = 0, start = 0;
+        for (int i = 0; i < 52500; i++)
+        {
+            std::string str = cv::format("\"KEY%d\"", i);
+            ofs << str;
+            if(iter == 1 && i - start > prev_len)
+            {
+                // build a stairway with increasing text row width
+                ofs << "\n";
+                prev_len = i - start;
+                start = i;
+            }
+            str = cv::format(": \"VALUE%d\", ", i);
+            ofs << str;
+        }
+        ofs << "}";
+        }
+
+        {
+        cv::FileStorage fs(temp_path, cv::FileStorage::READ);
+        char key[16], val0[16];
+        std::string val;
+        for(int i = 0; i < 52500; i += 100)
+        {
+            sprintf(key, "KEY%d", i);
+            sprintf(val0, "VALUE%d", i);
+            fs[key] >> val;
+            ASSERT_EQ(val, val0);
+        }
+        }
+        remove(temp_path.c_str());
+    }
+}
+
+TEST(Core_InputOutput, FileStorage_empty_16823)
+{
+    std::string fname = tempfile("test_fs_empty.yml");
+    {
+        // create empty file
+        std::ofstream f(fname.c_str(), std::ios::out);
+    }
+
+    try
+    {
+        FileStorage fs(fname, FileStorage::READ);
+        ADD_FAILURE() << "Exception must be thrown for empty file.";
+    }
+    catch (const cv::Exception&)
+    {
+        // expected way
+        // closed files can be checked manually through 'strace'
+    }
+    catch (const std::exception& e)
+    {
+        ADD_FAILURE() << "Unexpected exception: " << e.what();
+    }
+    catch (...)
+    {
+        ADD_FAILURE() << "Unexpected unknown C++ exception";
+    }
+
+    EXPECT_EQ(0, remove(fname.c_str()));
+}
+
+TEST(Core_InputOutput, FileStorage_open_empty_16823)
+{
+    std::string fname = tempfile("test_fs_open_empty.yml");
+    {
+        // create empty file
+        std::ofstream f(fname.c_str(), std::ios::out);
+    }
+
+    FileStorage fs;
+    try
+    {
+        fs.open(fname, FileStorage::READ);
+        ADD_FAILURE() << "Exception must be thrown for empty file.";
+    }
+    catch (const cv::Exception&)
+    {
+        // expected way
+        // closed files can be checked manually through 'strace'
+    }
+    catch (const std::exception& e)
+    {
+        ADD_FAILURE() << "Unexpected exception: " << e.what();
+    }
+    catch (...)
+    {
+        ADD_FAILURE() << "Unexpected unknown C++ exception";
+    }
+
+    EXPECT_EQ(0, remove(fname.c_str()));
+}
+
+TEST(Core_InputOutput, FileStorage_copy_constructor_17412)
+{
+    std::string fname = tempfile("test.yml");
+    FileStorage fs_orig(fname, cv::FileStorage::WRITE);
+    fs_orig << "string" << "wat";
+    fs_orig.release();
+
+    // no crash anymore
+    cv::FileStorage fs;
+    fs = cv::FileStorage(fname,  cv::FileStorage::READ);
+    std::string s;
+    fs["string"] >> s;
+    EXPECT_EQ(s, "wat");
+    EXPECT_EQ(0, remove(fname.c_str()));
+}
+
+TEST(Core_InputOutput, FileStorage_copy_constructor_17412_heap)
+{
+    std::string fname = tempfile("test.yml");
+    FileStorage fs_orig(fname, cv::FileStorage::WRITE);
+    fs_orig << "string" << "wat";
+    fs_orig.release();
+
+    // no crash anymore
+    cv::FileStorage fs;
+
+    // use heap to allow valgrind detections
+    {
+    cv::FileStorage* fs2 = new cv::FileStorage(fname, cv::FileStorage::READ);
+    fs = *fs2;
+    delete fs2;
+    }
+
+    std::string s;
+    fs["string"] >> s;
+    EXPECT_EQ(s, "wat");
+    EXPECT_EQ(0, remove(fname.c_str()));
 }
 
 }} // namespace

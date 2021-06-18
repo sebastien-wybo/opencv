@@ -2003,15 +2003,15 @@ void TestBase::RunPerfTestBody()
             implConf.GetImpl();
 #endif
     }
-    catch(const SkipTestException&)
-    {
-        metrics.terminationReason = performance_metrics::TERM_SKIP_TEST;
-        throw;
-    }
     catch(const PerfSkipTestException&)
     {
         metrics.terminationReason = performance_metrics::TERM_SKIP_TEST;
         return;
+    }
+    catch(const cvtest::details::SkipTestExceptionBase&)
+    {
+        metrics.terminationReason = performance_metrics::TERM_SKIP_TEST;
+        throw;
     }
     catch(const PerfEarlyExitException&)
     {
@@ -2168,7 +2168,7 @@ struct KeypointComparator
         return cmp(pts_[idx1], pts_[idx2]);
     }
 private:
-    const KeypointComparator& operator=(const KeypointComparator&); // quiet MSVC
+    KeypointComparator& operator=(const KeypointComparator&) = delete;
 };
 }//namespace
 

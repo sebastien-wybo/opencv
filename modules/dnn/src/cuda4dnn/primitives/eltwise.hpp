@@ -24,17 +24,32 @@ namespace cv { namespace dnn { namespace cuda4dnn {
     enum class EltwiseOpType {
         MAX,
         SUM,
-        PRODUCT
+        PRODUCT,
+        DIV
+    };
+
+    class EltwiseOpBase : public CUDABackendNode {
+    public:
+        EltwiseOpBase(csl::Stream stream_, EltwiseOpType op_, std::vector<float> coeffs_)
+            : stream(std::move(stream_)), op(op_), coeffs(std::move(coeffs_))
+        {
+        }
+
+    protected:
+        csl::Stream stream;
+
+    public:
+        EltwiseOpType op;
+        std::vector<float> coeffs;
     };
 
     template <class T>
-    class EltwiseOp final : public CUDABackendNode {
+    class EltwiseOp final : public EltwiseOpBase {
     public:
         using wrapper_type = GetCUDABackendWrapperType<T>;
 
-        template <class V>
-        EltwiseOp(csl::Stream stream_, EltwiseOpType op_, std::vector<V> coeffs_)
-            : stream(std::move(stream_)), op{ op_ }, coeffs(std::begin(coeffs_), std::end(coeffs_))
+        EltwiseOp(csl::Stream stream_, EltwiseOpType op_, std::vector<float> coeffs_)
+            : EltwiseOpBase(std::move(stream_), op_, std::move(coeffs_))
         {
         }
 
@@ -64,6 +79,7 @@ namespace cv { namespace dnn { namespace cuda4dnn {
                 {
                 case EltwiseOpType::MAX: kernels::eltwise_max_2<T>(stream, output, input_x, input_y); break;
                 case EltwiseOpType::PRODUCT: kernels::eltwise_prod_2<T>(stream, output, input_x, input_y); break;
+                case EltwiseOpType::DIV: kernels::eltwise_div_2<T>(stream, output, input_x, input_y); break;
                 case EltwiseOpType::SUM:
                     if (coeffs.empty() || (coeffs[0] == 1 && coeffs[1] == 1))
                         kernels::eltwise_sum_2<T>(stream, output, input_x, input_y);
@@ -89,13 +105,14 @@ namespace cv { namespace dnn { namespace cuda4dnn {
                     {
                     case EltwiseOpType::MAX: kernels::eltwise_max_2<T>(stream, output, output, input); break;
                     case EltwiseOpType::PRODUCT: kernels::eltwise_prod_2<T>(stream, output, output, input); break;
+                    case EltwiseOpType::DIV: kernels::eltwise_div_2<T>(stream, output, output, input); break;
                     case EltwiseOpType::SUM:
                         if (coeffs.empty() || coeffs[i] == 1)
                             kernels::eltwise_sum_2<T>(stream, output, output, input);
                         else
                         {
                             /* if this is the first op, we must scale output too */
-                            auto coeff_x = (i == 1) ? coeffs[0] : static_cast<T>(1.0);
+                            T coeff_x = (i == 1) ? coeffs[0] : 1.0;
                             kernels::eltwise_sum_coeff_2<T>(stream, output, coeff_x, output, coeffs[i], input);
                         }
                         break;
@@ -103,11 +120,6 @@ namespace cv { namespace dnn { namespace cuda4dnn {
                 }
             }
         }
-
-    private:
-        csl::Stream stream;
-        EltwiseOpType op;
-        std::vector<T> coeffs;
     };
 
 }}} /* namespace cv::dnn::cuda4dnn */

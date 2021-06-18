@@ -44,9 +44,9 @@ if(APPLE)
   set_target_properties(${the_module} PROPERTIES LINK_FLAGS "-undefined dynamic_lookup")
 elseif(WIN32 OR OPENCV_FORCE_PYTHON_LIBS)
   if(${PYTHON}_DEBUG_LIBRARIES AND NOT ${PYTHON}_LIBRARIES MATCHES "optimized.*debug")
-    ocv_target_link_libraries(${the_module} LINK_PRIVATE debug ${${PYTHON}_DEBUG_LIBRARIES} optimized ${${PYTHON}_LIBRARIES})
+    ocv_target_link_libraries(${the_module} PRIVATE debug ${${PYTHON}_DEBUG_LIBRARIES} optimized ${${PYTHON}_LIBRARIES})
   else()
-    ocv_target_link_libraries(${the_module} LINK_PRIVATE ${${PYTHON}_LIBRARIES})
+    ocv_target_link_libraries(${the_module} PRIVATE ${${PYTHON}_LIBRARIES})
   endif()
 endif()
 
@@ -54,7 +54,7 @@ if(TARGET gen_opencv_python_source)
   set(deps ${OPENCV_MODULE_${the_module}_DEPS})
   list(REMOVE_ITEM deps opencv_python_bindings_generator) # don't add dummy module to target_link_libraries list
 endif()
-ocv_target_link_libraries(${the_module} LINK_PRIVATE ${deps})
+ocv_target_link_libraries(${the_module} PRIVATE ${deps})
 
 if(DEFINED ${PYTHON}_CVPY_SUFFIX)
   set(CVPY_SUFFIX "${${PYTHON}_CVPY_SUFFIX}")
@@ -164,7 +164,12 @@ if(OPENCV_SKIP_PYTHON_LOADER)
   endif()
 else()
   ocv_assert(DEFINED OPENCV_PYTHON_INSTALL_PATH)
-  set(__python_binary_install_path "${OPENCV_PYTHON_INSTALL_PATH}/${__python_loader_subdir}python-${${PYTHON}_VERSION_MAJOR}.${${PYTHON}_VERSION_MINOR}")
+  if(${PYTHON}_LIMITED_API)
+    set(__python_binary_subdir "python-${${PYTHON}_VERSION_MAJOR}")
+  else()
+    set(__python_binary_subdir "python-${${PYTHON}_VERSION_MAJOR}.${${PYTHON}_VERSION_MINOR}")
+  endif()
+  set(__python_binary_install_path "${OPENCV_PYTHON_INSTALL_PATH}/${__python_loader_subdir}${__python_binary_subdir}")
 endif()
 
 install(TARGETS ${the_module}
@@ -192,7 +197,7 @@ if(NOT OPENCV_SKIP_PYTHON_LOADER)
     set(CMAKE_PYTHON_EXTENSION_INSTALL_PATH_BASE "LOADER_DIR")
   endif()
 
-  if(DEFINED ${PYTHON}_VERSION_MINOR)
+  if(DEFINED ${PYTHON}_VERSION_MINOR AND NOT ${PYTHON}_LIMITED_API)
     set(__target_config "config-${${PYTHON}_VERSION_MAJOR}.${${PYTHON}_VERSION_MINOR}.py")
   else()
     set(__target_config "config-${${PYTHON}_VERSION_MAJOR}.py")
@@ -213,6 +218,29 @@ if(NOT OPENCV_SKIP_PYTHON_LOADER)
   endif()
   configure_file("${PYTHON_SOURCE_DIR}/package/template/config-x.y.py.in" "${__python_loader_install_tmp_path}/cv2/${__target_config}" @ONLY)
   install(FILES "${__python_loader_install_tmp_path}/cv2/${__target_config}" DESTINATION "${OPENCV_PYTHON_INSTALL_PATH}/cv2/" COMPONENT python)
+
+  # handle Python extra code
+  foreach(m ${OPENCV_MODULES_BUILD})
+    if (";${OPENCV_MODULE_${m}_WRAPPERS};" MATCHES ";python;" AND HAVE_${m}
+        AND EXISTS "${OPENCV_MODULE_${m}_LOCATION}/misc/python/package"
+    )
+      set(__base "${OPENCV_MODULE_${m}_LOCATION}/misc/python/package")
+      file(GLOB_RECURSE extra_py_files
+          RELATIVE "${__base}"
+          "${__base}/**/*.py"
+      )
+      if(extra_py_files)
+        list(SORT extra_py_files)
+        foreach(f ${extra_py_files})
+          get_filename_component(__dir "${f}" DIRECTORY)
+          configure_file("${__base}/${f}" "${__loader_path}/cv2/_extra_py_code/${f}" COPYONLY)
+          install(FILES "${__base}/${f}" DESTINATION "${OPENCV_PYTHON_INSTALL_PATH}/cv2/_extra_py_code/${__dir}/" COMPONENT python)
+        endforeach()
+      else()
+        message(WARNING "Module ${m} has no .py files in misc/python/package")
+      endif()
+    endif()
+  endforeach(m)
 endif()  # NOT OPENCV_SKIP_PYTHON_LOADER
 
 unset(PYTHON_SRC_DIR)

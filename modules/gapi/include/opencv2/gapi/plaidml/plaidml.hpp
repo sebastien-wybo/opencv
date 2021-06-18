@@ -15,14 +15,27 @@ namespace cv
 {
 namespace gapi
 {
+
+/**
+ * @brief This namespace contains G-API PlaidML backend functions,
+ * structures, and symbols.
+ */
 namespace plaidml
 {
 
+/** \addtogroup gapi_compile_args
+ * @{
+ */
+/**
+ * @brief This structure represents the basic parameters for the experimental
+ * PlaidML backend.
+ */
 struct config
 {
-    std::string dev_id;
-    std::string trg_id;
+    std::string dev_id; //!< Device ID. Refer to PlaidML documentation for details.
+    std::string trg_id; //!< Target ID. Refer to PlaidML documentation for details.
 };
+/** @} gapi_compile_args */
 
 } // namespace plaidml
 } // namespace gapi

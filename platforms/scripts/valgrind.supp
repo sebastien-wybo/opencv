@@ -43,7 +43,7 @@
 {
    OpenCV-getCoreTlsData
    Memcheck:Leak
-   fun:_Znwm
+   ...
    fun:_ZN2cv14getCoreTlsDataEv
 }
 
@@ -216,6 +216,13 @@
    Memcheck:Leak
    ...
    fun:__itt_*create*
+}
+
+{
+   OpenCV-SingletonLogger
+   Memcheck:Leak
+   ...
+   fun:_ZN2cv5utils7logging8internalL26getGlobalLoggingInitStructEv
 }
 
 {

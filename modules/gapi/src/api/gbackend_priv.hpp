@@ -19,7 +19,7 @@
 #include "opencv2/gapi/gkernel.hpp"
 
 #include "compiler/gmodel.hpp"
-
+#include "compiler/gislandmodel.hpp"
 
 namespace cv
 {
@@ -50,15 +50,39 @@ public:
                          const GCompileArgs &args,
                          const std::vector<ade::NodeHandle> &nodes) const;
 
+
     virtual EPtr compile(const ade::Graph   &graph,
                          const GCompileArgs &args,
                          const std::vector<ade::NodeHandle> &nodes,
                          const std::vector<cv::gimpl::Data>& ins_data,
                          const std::vector<cv::gimpl::Data>& outs_data) const;
 
+    // Ask backend to provide general backend-specific compiler passes
     virtual void addBackendPasses(ade::ExecutionEngineSetupContext &);
 
+    // Ask backend to put extra meta-sensitive backend passes Since
+    // the inception of Streaming API one can compile graph without
+    // meta information, so if some passes depend on this information,
+    // they are called when meta information becomes available.
+    virtual void addMetaSensitiveBackendPasses(ade::ExecutionEngineSetupContext &);
+
     virtual cv::gapi::GKernelPackage auxiliaryKernels() const;
+
+    // Ask backend if it has a custom control over island fusion process
+    // This method is quite redundant but there's nothing better fits
+    // the current fusion process. By default, [existing] backends don't
+    // control the merge.
+    // FIXME: Refactor to a single entity?
+    virtual bool controlsMerge() const;
+
+    // Ask backend if it is ok to merge these two islands connected
+    // via a data slot. By default, [existing] backends allow to merge everything.
+    // FIXME: Refactor to a single entity?
+    // FIXME: Strip down the type details form graph? (make it ade::Graph?)
+    virtual bool allowsMerge(const cv::gimpl::GIslandModel::Graph &g,
+                             const ade::NodeHandle &a_nh,
+                             const ade::NodeHandle &slot_nh,
+                             const ade::NodeHandle &b_nh) const;
 
     virtual ~Priv() = default;
 };

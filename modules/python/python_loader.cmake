@@ -25,10 +25,12 @@ endif()
 set(PYTHON_LOADER_FILES
     "setup.py" "cv2/__init__.py"
     "cv2/load_config_py2.py" "cv2/load_config_py3.py"
+    "cv2/_extra_py_code/__init__.py"
 )
 foreach(fname ${PYTHON_LOADER_FILES})
   get_filename_component(__dir "${fname}" DIRECTORY)
-  file(COPY "${PYTHON_SOURCE_DIR}/package/${fname}" DESTINATION "${__loader_path}/${__dir}")
+  # avoid using of file(COPY) to rerun CMake on changes
+  configure_file("${PYTHON_SOURCE_DIR}/package/${fname}" "${__loader_path}/${fname}" COPYONLY)
   if(fname STREQUAL "setup.py")
     if(OPENCV_PYTHON_SETUP_PY_INSTALL_PATH)
       install(FILES "${PYTHON_SOURCE_DIR}/package/${fname}" DESTINATION "${OPENCV_PYTHON_SETUP_PY_INSTALL_PATH}" COMPONENT python)
@@ -58,7 +60,13 @@ if(NOT OpenCV_FOUND)  # Ignore "standalone" builds of Python bindings
     else()
       list(APPEND CMAKE_PYTHON_BINARIES_INSTALL_PATH "os.path.join(${CMAKE_PYTHON_EXTENSION_INSTALL_PATH_BASE}, '${OPENCV_LIB_INSTALL_PATH}')")
     endif()
-    string(REPLACE ";" ",\n    " CMAKE_PYTHON_BINARIES_PATH "${CMAKE_PYTHON_BINARIES_INSTALL_PATH}")
+    set(CMAKE_PYTHON_BINARIES_PATH "${CMAKE_PYTHON_BINARIES_INSTALL_PATH}")
+    if (WIN32 AND HAVE_CUDA)
+      if (DEFINED CUDA_TOOLKIT_ROOT_DIR)
+        list(APPEND CMAKE_PYTHON_BINARIES_PATH "os.path.join(os.getenv('CUDA_PATH', '${CUDA_TOOLKIT_ROOT_DIR}'), 'bin')")
+      endif()
+    endif()
+    string(REPLACE ";" ",\n    " CMAKE_PYTHON_BINARIES_PATH "${CMAKE_PYTHON_BINARIES_PATH}")
     configure_file("${PYTHON_SOURCE_DIR}/package/template/config.py.in" "${__python_loader_install_tmp_path}/cv2/config.py" @ONLY)
     install(FILES "${__python_loader_install_tmp_path}/cv2/config.py" DESTINATION "${OPENCV_PYTHON_INSTALL_PATH}/cv2/" COMPONENT python)
   endif()

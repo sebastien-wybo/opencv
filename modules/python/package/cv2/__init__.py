@@ -4,6 +4,8 @@ OpenCV Python binary extension loader
 import os
 import sys
 
+__all__ = []
+
 try:
     import numpy
     import numpy.core.multiarray
@@ -13,11 +15,23 @@ except ImportError:
     print('    pip install numpy')
     raise
 
+
+py_code_loader = None
+if sys.version_info[:2] >= (3, 0):
+    try:
+        from . import _extra_py_code as py_code_loader
+    except:
+        pass
+
 # TODO
 # is_x64 = sys.maxsize > 2**32
 
 def bootstrap():
     import sys
+
+    import copy
+    save_sys_path = copy.copy(sys.path)
+
     if hasattr(sys, 'OpenCV_LOADER'):
         print(sys.path)
         raise ImportError('ERROR: recursion is detected during loading of "cv2" binary extensions. Check OpenCV installation.')
@@ -30,7 +44,7 @@ def bootstrap():
     import platform
     if DEBUG: print('OpenCV loader: os.name="{}"  platform.system()="{}"'.format(os.name, str(platform.system())))
 
-    LOADER_DIR=os.path.dirname(os.path.abspath(__file__))
+    LOADER_DIR = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
 
     PYTHON_EXTENSIONS_PATHS = []
     BINARIES_PATHS = []
@@ -64,10 +78,29 @@ def bootstrap():
     if DEBUG: print('OpenCV loader: PYTHON_EXTENSIONS_PATHS={}'.format(str(l_vars['PYTHON_EXTENSIONS_PATHS'])))
     if DEBUG: print('OpenCV loader: BINARIES_PATHS={}'.format(str(l_vars['BINARIES_PATHS'])))
 
+    applySysPathWorkaround = False
+    if hasattr(sys, 'OpenCV_REPLACE_SYS_PATH_0'):
+        applySysPathWorkaround = True
+    else:
+        try:
+            BASE_DIR = os.path.dirname(LOADER_DIR)
+            if sys.path[0] == BASE_DIR or os.path.realpath(sys.path[0]) == BASE_DIR:
+                applySysPathWorkaround = True
+        except:
+            if DEBUG: print('OpenCV loader: exception during checking workaround for sys.path[0]')
+            pass  # applySysPathWorkaround is False
+
     for p in reversed(l_vars['PYTHON_EXTENSIONS_PATHS']):
-        sys.path.insert(1, p)
+        sys.path.insert(1 if not applySysPathWorkaround else 0, p)
 
     if os.name == 'nt':
+        if sys.version_info[:2] >= (3, 8):  # https://github.com/python/cpython/pull/12302
+            for p in l_vars['BINARIES_PATHS']:
+                try:
+                    os.add_dll_directory(p)
+                except Exception as e:
+                    if DEBUG: print('Failed os.add_dll_directory(): '+ str(e))
+                    pass
         os.environ['PATH'] = ';'.join(l_vars['BINARIES_PATHS']) + ';' + os.environ.get('PATH', '')
         if DEBUG: print('OpenCV loader: PATH={}'.format(str(os.environ['PATH'])))
     else:
@@ -78,11 +111,18 @@ def bootstrap():
     del sys.modules['cv2']
     import cv2
 
+    sys.path = save_sys_path  # multiprocessing should start from bootstrap code (https://github.com/opencv/opencv/issues/18502)
+
     try:
         import sys
         del sys.OpenCV_LOADER
     except:
         pass
+
+    if DEBUG: print('OpenCV loader: binary extension... OK')
+
+    if py_code_loader:
+        py_code_loader.init('cv2')
 
     if DEBUG: print('OpenCV loader: DONE')
 

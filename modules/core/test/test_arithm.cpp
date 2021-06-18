@@ -2021,6 +2021,14 @@ TEST(Compare, regression_8999)
     EXPECT_THROW(cv::compare(A, B, C, CMP_LT), cv::Exception);
 }
 
+TEST(Compare, regression_16F_do_not_crash)
+{
+    cv::Mat mat1(2, 2, CV_16F, cv::Scalar(1));
+    cv::Mat mat2(2, 2, CV_16F, cv::Scalar(2));
+    cv::Mat dst;
+    EXPECT_THROW(cv::compare(mat1, mat2, dst, cv::CMP_EQ), cv::Exception);
+}
+
 
 TEST(Core_minMaxIdx, regression_9207_1)
 {
@@ -2444,6 +2452,18 @@ TEST(Core_MinMaxIdx, rows_overflow)
         EXPECT_FALSE(fabs(minVal0 - minVal) > 1e-6 || fabs(maxVal0 - maxVal) > 1e-6) << "NxM=" << N << "x" << M <<
             "    min=" << minVal0 << " vs " <<  minVal <<
             "    max=" << maxVal0 << " vs " << maxVal;
+    }
+}
+
+
+TEST(Core_Magnitude, regression_19506)
+{
+    for (int N = 1; N <= 64; ++N)
+    {
+        Mat a(1, N, CV_32FC1, Scalar::all(1e-20));
+        Mat res;
+        magnitude(a, a, res);
+        EXPECT_LE(cvtest::norm(res, NORM_L1), 1e-15) << N;
     }
 }
 

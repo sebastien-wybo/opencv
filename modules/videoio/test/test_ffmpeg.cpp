@@ -180,6 +180,54 @@ const videoio_container_params_t videoio_container_params[] =
 
 INSTANTIATE_TEST_CASE_P(/**/, videoio_container, testing::ValuesIn(videoio_container_params));
 
+typedef tuple<string, string, int> videoio_skip_params_t;
+typedef testing::TestWithParam< videoio_skip_params_t > videoio_skip;
+
+TEST_P(videoio_skip, DISABLED_read)  // optional test, may fail in some configurations
+{
+#if CV_VERSION_MAJOR >= 4
+    if (!videoio_registry::hasBackend(CAP_FFMPEG))
+        throw SkipTestException("Backend was not found");
+#endif
+
+    const string path = get<0>(GetParam());
+    const string env = get<1>(GetParam());
+    const int expectedFrameNumber = get<2>(GetParam());
+
+    #ifdef _WIN32
+        _putenv_s("OPENCV_FFMPEG_CAPTURE_OPTIONS", env.c_str());
+    #else
+        setenv("OPENCV_FFMPEG_CAPTURE_OPTIONS", env.c_str(), 1);
+    #endif
+    VideoCapture container(findDataFile(path), CAP_FFMPEG);
+    #ifdef _WIN32
+        _putenv_s("OPENCV_FFMPEG_CAPTURE_OPTIONS", "");
+    #else
+        setenv("OPENCV_FFMPEG_CAPTURE_OPTIONS", "", 1);
+    #endif
+
+    ASSERT_TRUE(container.isOpened());
+
+    Mat reference;
+    int nframes = 0, n_err = 0;
+    while (container.isOpened())
+    {
+        if (container.read(reference))
+            nframes++;
+        else if (++n_err > 3)
+            break;
+    }
+    EXPECT_EQ(expectedFrameNumber, nframes);
+}
+
+const videoio_skip_params_t videoio_skip_params[] =
+{
+    videoio_skip_params_t("video/big_buck_bunny.mp4", "", 125),
+    videoio_skip_params_t("video/big_buck_bunny.mp4", "avdiscard;nonkey", 11)
+};
+
+INSTANTIATE_TEST_CASE_P(/**/, videoio_skip, testing::ValuesIn(videoio_skip_params));
+
 //==========================================================================
 
 static void generateFrame(Mat &frame, unsigned int i, const Point &center, const Scalar &color)
@@ -284,5 +332,188 @@ TEST(videoio_ffmpeg, parallel)
         remove(files[i].c_str());
     }
 }
+
+typedef std::pair<VideoCaptureProperties, double> cap_property_t;
+typedef std::vector<cap_property_t> cap_properties_t;
+typedef std::pair<std::string, cap_properties_t> ffmpeg_cap_properties_param_t;
+typedef testing::TestWithParam<ffmpeg_cap_properties_param_t> ffmpeg_cap_properties;
+
+#ifdef _WIN32
+namespace {
+::testing::AssertionResult IsOneOf(double value, double expected1, double expected2)
+{
+    // internal floating point class is used to perform accurate floating point types comparison
+    typedef ::testing::internal::FloatingPoint<double> FloatingPoint;
+
+    FloatingPoint val(value);
+    if (val.AlmostEquals(FloatingPoint(expected1)) || val.AlmostEquals(FloatingPoint(expected2)))
+    {
+        return ::testing::AssertionSuccess();
+    }
+    else
+    {
+        return ::testing::AssertionFailure()
+               << value << " is neither  equal to " << expected1 << " nor " << expected2;
+    }
+}
+}
+#endif
+
+TEST_P(ffmpeg_cap_properties, can_read_property)
+{
+    if (!videoio_registry::hasBackend(CAP_FFMPEG))
+        throw SkipTestException("FFmpeg backend was not found");
+
+    ffmpeg_cap_properties_param_t parameters = GetParam();
+    const std::string path = parameters.first;
+    const cap_properties_t properties = parameters.second;
+
+    VideoCapture cap(findDataFile(path), CAP_FFMPEG);
+    ASSERT_TRUE(cap.isOpened()) << "Can not open " << findDataFile(path);
+
+    for (std::size_t i = 0; i < properties.size(); ++i)
+    {
+        const cap_property_t& prop = properties[i];
+        const double actualValue = cap.get(static_cast<int>(prop.first));
+    #ifndef _WIN32
+        EXPECT_DOUBLE_EQ(actualValue, prop.second)
+            << "Property " << static_cast<int>(prop.first) << " has wrong value";
+    #else
+        EXPECT_TRUE(IsOneOf(actualValue, prop.second, 0.0))
+            << "Property " << static_cast<int>(prop.first) << " has wrong value";
+    #endif
+    }
+}
+
+cap_properties_t loadBigBuckBunnyFFProbeResults() {
+    cap_property_t properties[] = { cap_property_t(CAP_PROP_BITRATE, 5851.),
+                                    cap_property_t(CAP_PROP_FPS, 24.),
+                                    cap_property_t(CAP_PROP_FRAME_HEIGHT, 384.),
+                                    cap_property_t(CAP_PROP_FRAME_WIDTH, 672.) };
+    return cap_properties_t(properties, properties + sizeof(properties) / sizeof(cap_property_t));
+}
+
+const ffmpeg_cap_properties_param_t videoio_ffmpeg_properties[] = {
+    ffmpeg_cap_properties_param_t("video/big_buck_bunny.avi", loadBigBuckBunnyFFProbeResults())
+};
+
+INSTANTIATE_TEST_CASE_P(videoio, ffmpeg_cap_properties, testing::ValuesIn(videoio_ffmpeg_properties));
+
+
+
+// related issue: https://github.com/opencv/opencv/issues/15499
+TEST(videoio, mp4_orientation_meta_auto)
+{
+    if (!videoio_registry::hasBackend(CAP_FFMPEG))
+        throw SkipTestException("FFmpeg backend was not found");
+
+    string video_file = string(cvtest::TS::ptr()->get_data_path()) + "video/big_buck_bunny_rotated.mp4";
+
+    VideoCapture cap;
+    EXPECT_NO_THROW(cap.open(video_file, CAP_FFMPEG));
+    ASSERT_TRUE(cap.isOpened()) << "Can't open the video: " << video_file << " with backend " << CAP_FFMPEG << std::endl;
+
+    cap.set(CAP_PROP_ORIENTATION_AUTO, true);
+    if (cap.get(CAP_PROP_ORIENTATION_AUTO) == 0)
+        throw SkipTestException("FFmpeg frame rotation metadata is not supported");
+
+    Size actual;
+    EXPECT_NO_THROW(actual = Size((int)cap.get(CAP_PROP_FRAME_WIDTH),
+                                    (int)cap.get(CAP_PROP_FRAME_HEIGHT)));
+    EXPECT_EQ(384, actual.width);
+    EXPECT_EQ(672, actual.height);
+
+    Mat frame;
+
+    cap >> frame;
+
+    ASSERT_EQ(384, frame.cols);
+    ASSERT_EQ(672, frame.rows);
+}
+
+// related issue: https://github.com/opencv/opencv/issues/15499
+TEST(videoio, mp4_orientation_no_rotation)
+{
+    if (!videoio_registry::hasBackend(CAP_FFMPEG))
+        throw SkipTestException("FFmpeg backend was not found");
+
+    string video_file = string(cvtest::TS::ptr()->get_data_path()) + "video/big_buck_bunny_rotated.mp4";
+
+    VideoCapture cap;
+    EXPECT_NO_THROW(cap.open(video_file, CAP_FFMPEG));
+    cap.set(CAP_PROP_ORIENTATION_AUTO, 0);
+    ASSERT_TRUE(cap.isOpened()) << "Can't open the video: " << video_file << " with backend " << CAP_FFMPEG << std::endl;
+    ASSERT_FALSE(cap.get(CAP_PROP_ORIENTATION_AUTO));
+
+    Size actual;
+    EXPECT_NO_THROW(actual = Size((int)cap.get(CAP_PROP_FRAME_WIDTH),
+                                    (int)cap.get(CAP_PROP_FRAME_HEIGHT)));
+    EXPECT_EQ(672, actual.width);
+    EXPECT_EQ(384, actual.height);
+
+    Mat frame;
+
+    cap >> frame;
+
+    ASSERT_EQ(672, frame.cols);
+    ASSERT_EQ(384, frame.rows);
+}
+
+
+static void ffmpeg_check_read_raw(VideoCapture& cap)
+{
+    ASSERT_TRUE(cap.isOpened()) << "Can't open the video";
+
+    Mat data;
+    cap >> data;
+    EXPECT_EQ(CV_8UC1, data.type()) << "CV_8UC1 != " << typeToString(data.type());
+    EXPECT_TRUE(data.rows == 1 || data.cols == 1) << data.size;
+    EXPECT_EQ((size_t)29729, data.total());
+
+    cap >> data;
+    EXPECT_EQ(CV_8UC1, data.type()) << "CV_8UC1 != " << typeToString(data.type());
+    EXPECT_TRUE(data.rows == 1 || data.cols == 1) << data.size;
+    EXPECT_EQ((size_t)37118, data.total());
+}
+
+TEST(videoio_ffmpeg, open_with_property)
+{
+    if (!videoio_registry::hasBackend(CAP_FFMPEG))
+        throw SkipTestException("FFmpeg backend was not found");
+
+    string video_file = findDataFile("video/big_buck_bunny.mp4");
+    VideoCapture cap;
+    EXPECT_NO_THROW(cap.open(video_file, CAP_FFMPEG, {
+        CAP_PROP_FORMAT, -1  // demux only
+    }));
+
+    ffmpeg_check_read_raw(cap);
+}
+
+TEST(videoio_ffmpeg, create_with_property)
+{
+    if (!videoio_registry::hasBackend(CAP_FFMPEG))
+        throw SkipTestException("FFmpeg backend was not found");
+
+    string video_file = findDataFile("video/big_buck_bunny.mp4");
+    VideoCapture cap(video_file, CAP_FFMPEG, {
+        CAP_PROP_FORMAT, -1  // demux only
+    });
+
+    ffmpeg_check_read_raw(cap);
+}
+
+TEST(videoio_ffmpeg, create_with_property_badarg)
+{
+    if (!videoio_registry::hasBackend(CAP_FFMPEG))
+        throw SkipTestException("FFmpeg backend was not found");
+
+    string video_file = findDataFile("video/big_buck_bunny.mp4");
+    VideoCapture cap(video_file, CAP_FFMPEG, {
+        CAP_PROP_FORMAT, -2  // invalid
+    });
+    EXPECT_FALSE(cap.isOpened());
+}
+
 
 }} // namespace

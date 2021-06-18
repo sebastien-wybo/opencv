@@ -11,7 +11,6 @@
 
 #ifdef HAVE_INF_ENGINE
 #include <ie_extension.h>
-#include <ie_plugin_dispatcher.hpp>
 #endif  // HAVE_INF_ENGINE
 
 #include <opencv2/core/utils/configuration.private.hpp>
@@ -20,6 +19,86 @@
 namespace cv { namespace dnn {
 
 #ifdef HAVE_INF_ENGINE
+
+static Backend parseInferenceEngineBackendType(const cv::String& backend)
+{
+    CV_Assert(!backend.empty());
+    if (backend == CV_DNN_BACKEND_INFERENCE_ENGINE_NGRAPH)
+        return DNN_BACKEND_INFERENCE_ENGINE_NGRAPH;
+    if (backend == CV_DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_API)
+        return DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019;
+    CV_Error(Error::StsBadArg, cv::format("Unknown IE backend: %s", backend.c_str()));
+}
+static const char* dumpInferenceEngineBackendType(Backend backend)
+{
+    if (backend == DNN_BACKEND_INFERENCE_ENGINE_NGRAPH)
+        return CV_DNN_BACKEND_INFERENCE_ENGINE_NGRAPH;
+    if (backend == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019)
+        return CV_DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_API;
+    CV_Error(Error::StsBadArg, cv::format("Invalid backend ID for IE: %d", backend));
+}
+Backend& getInferenceEngineBackendTypeParam()
+{
+    static Backend param = parseInferenceEngineBackendType(
+        utils::getConfigurationParameterString("OPENCV_DNN_BACKEND_INFERENCE_ENGINE_TYPE",
+#ifdef HAVE_DNN_NGRAPH
+            CV_DNN_BACKEND_INFERENCE_ENGINE_NGRAPH
+#elif defined(HAVE_DNN_IE_NN_BUILDER_2019)
+            CV_DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_API
+#else
+#error "Build configuration error: nGraph or NN Builder API backend should be enabled"
+#endif
+        )
+    );
+    return param;
+}
+
+CV__DNN_INLINE_NS_BEGIN
+
+cv::String getInferenceEngineBackendType()
+{
+    return dumpInferenceEngineBackendType(getInferenceEngineBackendTypeParam());
+}
+cv::String setInferenceEngineBackendType(const cv::String& newBackendType)
+{
+    Backend newBackend = parseInferenceEngineBackendType(newBackendType);
+    Backend& param = getInferenceEngineBackendTypeParam();
+    Backend old = param;
+    param = newBackend;
+    return dumpInferenceEngineBackendType(old);
+}
+
+CV__DNN_INLINE_NS_END
+
+
+Mat infEngineBlobToMat(const InferenceEngine::Blob::Ptr& blob)
+{
+    // NOTE: Inference Engine sizes are reversed.
+    std::vector<size_t> dims = blob->getTensorDesc().getDims();
+    std::vector<int> size(dims.begin(), dims.end());
+    auto precision = blob->getTensorDesc().getPrecision();
+
+    int type = -1;
+    switch (precision)
+    {
+        case InferenceEngine::Precision::FP32: type = CV_32F; break;
+        case InferenceEngine::Precision::U8: type = CV_8U; break;
+        default:
+            CV_Error(Error::StsNotImplemented, "Unsupported blob precision");
+    }
+    return Mat(size, type, (void*)blob->buffer());
+}
+
+void infEngineBlobsToMats(const std::vector<InferenceEngine::Blob::Ptr>& blobs,
+                          std::vector<Mat>& mats)
+{
+    mats.resize(blobs.size());
+    for (int i = 0; i < blobs.size(); ++i)
+        mats[i] = infEngineBlobToMat(blobs[i]);
+}
+
+
+#ifdef HAVE_DNN_IE_NN_BUILDER_2019
 
 // For networks with input layer which has an empty name, IE generates a name id[some_number].
 // OpenCV lets users use an empty input name and to prevent unexpected naming,
@@ -161,38 +240,25 @@ private:
     InferenceEngine::CNNLayer cnnLayer;
 };
 
-class InfEngineExtension : public InferenceEngine::IExtension
+InferenceEngine::StatusCode InfEngineExtension::getFactoryFor(
+        InferenceEngine::ILayerImplFactory*& factory,
+        const InferenceEngine::CNNLayer* cnnLayer,
+        InferenceEngine::ResponseDesc* resp
+) noexcept
 {
-public:
-    virtual void SetLogCallback(InferenceEngine::IErrorListener&) noexcept {}
-    virtual void Unload() noexcept {}
-    virtual void Release() noexcept {}
-    virtual void GetVersion(const InferenceEngine::Version*&) const noexcept {}
-
-    virtual InferenceEngine::StatusCode getPrimitiveTypes(char**&, unsigned int&,
-                                                          InferenceEngine::ResponseDesc*) noexcept
-    {
-        return InferenceEngine::StatusCode::OK;
-    }
-
-    InferenceEngine::StatusCode getFactoryFor(InferenceEngine::ILayerImplFactory*& factory,
-                                              const InferenceEngine::CNNLayer* cnnLayer,
-                                              InferenceEngine::ResponseDesc* resp) noexcept
-    {
-        if (cnnLayer->type != kOpenCVLayersType)
-            return InferenceEngine::StatusCode::NOT_IMPLEMENTED;
-        factory = new InfEngineCustomLayerFactory(cnnLayer);
-        return InferenceEngine::StatusCode::OK;
-    }
-};
+    if (cnnLayer->type != kOpenCVLayersType)
+        return InferenceEngine::StatusCode::NOT_IMPLEMENTED;
+    factory = new InfEngineCustomLayerFactory(cnnLayer);
+    return InferenceEngine::StatusCode::OK;
+}
 
 InfEngineBackendNode::InfEngineBackendNode(const InferenceEngine::Builder::Layer& _layer)
-    : BackendNode(DNN_BACKEND_INFERENCE_ENGINE), layer(_layer) {}
+    : BackendNode(DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019), layer(_layer) {}
 
     InfEngineBackendNode::InfEngineBackendNode(Ptr<Layer>& cvLayer_, std::vector<Mat*>& inputs,
                                                std::vector<Mat>& outputs,
                                                std::vector<Mat>& internals)
-        : BackendNode(DNN_BACKEND_INFERENCE_ENGINE), layer(cvLayer_->name),
+        : BackendNode(DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019), layer(cvLayer_->name),
           cvLayer(cvLayer_)
 {
     CV_Assert(!cvLayer->name.empty());
@@ -243,11 +309,28 @@ void InfEngineBackendNet::connect(const std::vector<Ptr<BackendWrapper> >& input
     {
         const auto& inp = inpWrappers[i];
         const std::string& inpName = inp->dataPtr->getName();
+
+        std::string inpLayerName = inpName;
+        size_t inpPortId = inpName.rfind('.');
+        if (inpPortId != std::string::npos)
+        {
+            std::string portIdStr = inpName.substr(inpPortId + 1);
+            if (std::all_of(portIdStr.begin(), portIdStr.end(), ::isdigit))
+            {
+                inpLayerName = inpName.substr(0, inpPortId);
+                inpPortId = atoi(portIdStr.c_str());
+            }
+            else
+                inpPortId = 0;
+        }
+        else
+            inpPortId = 0;
+
         int inpId;
-        it = layers.find(inpName);
+        it = layers.find(inpLayerName);
         if (it == layers.end())
         {
-            InferenceEngine::Builder::InputLayer inpLayer(!inpName.empty() ? inpName : kDefaultInpLayerName);
+            InferenceEngine::Builder::InputLayer inpLayer(!inpLayerName.empty() ? inpLayerName : kDefaultInpLayerName);
             std::vector<size_t> shape(inp->blob->getTensorDesc().getDims());
             inpLayer.setPort(InferenceEngine::Port(shape));
             inpId = netBuilder.addLayer(inpLayer);
@@ -257,35 +340,40 @@ void InfEngineBackendNet::connect(const std::vector<Ptr<BackendWrapper> >& input
         else
             inpId = it->second;
 
-        netBuilder.connect((size_t)inpId, {(size_t)layerId, i});
-        unconnectedLayersIds.erase(inpId);
+        netBuilder.connect({(size_t)inpId, inpPortId}, {(size_t)layerId, i});
+        unconnectedPorts.erase({inpId, inpPortId});
     }
     CV_Assert(!outputs.empty());
-    InferenceEngine::DataPtr dataPtr = infEngineDataNode(outputs[0]);
+    for (int i = 0; i < outputs.size(); ++i)
+    {
+        InferenceEngine::DataPtr dataPtr = infEngineDataNode(outputs[i]);
+        std::string outputName = outputs.size() > 1 ? (layerName + "." + std::to_string(i)) : layerName;
 #if INF_ENGINE_VER_MAJOR_LE(INF_ENGINE_RELEASE_2019R1)
-    dataPtr->name = layerName;
+        dataPtr->name = outputName;
 #else
-    dataPtr->setName(layerName);
+        dataPtr->setName(outputName);
 #endif
+    }
 }
 
-void InfEngineBackendNet::init(int targetId)
+void InfEngineBackendNet::init(Target targetId)
 {
     if (!hasNetOwner)
     {
-        CV_Assert(!unconnectedLayersIds.empty());
-        for (int id : unconnectedLayersIds)
+        CV_Assert(!unconnectedPorts.empty());
+        for (const auto& port : unconnectedPorts)
         {
             InferenceEngine::Builder::OutputLayer outLayer("myconv1");
 #if INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2019R1)
             // Inference Engine determines network precision by ports.
             InferenceEngine::Precision p = (targetId == DNN_TARGET_MYRIAD ||
+                                            targetId == DNN_TARGET_HDDL ||
                                             targetId == DNN_TARGET_OPENCL_FP16) ?
                                            InferenceEngine::Precision::FP16 :
                                            InferenceEngine::Precision::FP32;
             outLayer.setPort(InferenceEngine::Port({}, p));
 #endif
-            netBuilder.addLayer({InferenceEngine::PortInfo(id)}, outLayer);
+            netBuilder.addLayer({InferenceEngine::PortInfo(port.first, port.second)}, outLayer);
         }
         netBuilder.getContext().addShapeInferImpl(kOpenCVLayersType,
                             std::make_shared<InfEngineCustomLayerShapeInfer>());
@@ -303,6 +391,9 @@ void InfEngineBackendNet::init(int targetId)
             break;
         case DNN_TARGET_MYRIAD:
             device_name = "MYRIAD";
+            break;
+        case DNN_TARGET_HDDL:
+            device_name = "HDDL";
             break;
         case DNN_TARGET_FPGA:
             device_name = "FPGA";
@@ -374,8 +465,10 @@ void InfEngineBackendNet::addLayer(InferenceEngine::Builder::Layer& layer)
 
     int id = netBuilder.addLayer(layer);
     const std::string& layerName = layer.getName();
+
     CV_Assert(layers.insert({layerName, id}).second);
-    unconnectedLayersIds.insert(id);
+    for (int i = 0; i < layer.getOutputPorts().size(); ++i)
+        unconnectedPorts.insert({id, i});
 
 #if INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2019R1)
     // By default, all the weights are connected to last ports ids.
@@ -403,7 +496,7 @@ static InferenceEngine::Layout estimateLayout(const Mat& m)
 
 static InferenceEngine::DataPtr wrapToInfEngineDataNode(const Mat& m, const std::string& name = "")
 {
-    std::vector<size_t> shape(&m.size[0], &m.size[0] + m.dims);
+    std::vector<size_t> shape = getShape<size_t>(m);
     if (m.type() == CV_32F)
         return InferenceEngine::DataPtr(new InferenceEngine::Data(name,
                {InferenceEngine::Precision::FP32, shape, estimateLayout(m)}));
@@ -429,7 +522,7 @@ InferenceEngine::Blob::Ptr wrapToInfEngineBlob(const Mat& m, const std::vector<s
 
 InferenceEngine::Blob::Ptr wrapToInfEngineBlob(const Mat& m, InferenceEngine::Layout layout)
 {
-    std::vector<size_t> shape(&m.size[0], &m.size[0] + m.dims);
+    std::vector<size_t> shape = getShape<size_t>(m);
     return wrapToInfEngineBlob(m, shape, layout);
 }
 
@@ -461,14 +554,14 @@ InferenceEngine::DataPtr infEngineDataNode(const Ptr<BackendWrapper>& ptr)
 }
 
 InfEngineBackendWrapper::InfEngineBackendWrapper(int targetId, const cv::Mat& m)
-    : BackendWrapper(DNN_BACKEND_INFERENCE_ENGINE, targetId)
+    : BackendWrapper(DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019, targetId)
 {
     dataPtr = wrapToInfEngineDataNode(m);
     blob = wrapToInfEngineBlob(m, estimateLayout(m));
 }
 
 InfEngineBackendWrapper::InfEngineBackendWrapper(Ptr<BackendWrapper> wrapper)
-    : BackendWrapper(DNN_BACKEND_INFERENCE_ENGINE, wrapper->targetId)
+    : BackendWrapper(DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019, wrapper->targetId)
 {
     Ptr<InfEngineBackendWrapper> ieWrapper = wrapper.dynamicCast<InfEngineBackendWrapper>();
     CV_Assert(!ieWrapper.empty());
@@ -498,6 +591,7 @@ void InfEngineBackendWrapper::setHostDirty()
 
 }
 
+#endif // HAVE_DNN_IE_NN_BUILDER_2019
 
 #if INF_ENGINE_VER_MAJOR_LE(INF_ENGINE_RELEASE_2019R1)
 static std::map<std::string, InferenceEngine::InferenceEnginePluginPtr>& getSharedPlugins()
@@ -506,16 +600,96 @@ static std::map<std::string, InferenceEngine::InferenceEnginePluginPtr>& getShar
     return sharedPlugins;
 }
 #else
-static InferenceEngine::Core& getCore()
+static bool init_IE_plugins()
 {
-    static InferenceEngine::Core core;
+    // load and hold IE plugins
+    static InferenceEngine::Core* init_core = new InferenceEngine::Core();  // 'delete' is never called
+    (void)init_core->GetAvailableDevices();
+    return true;
+}
+static InferenceEngine::Core& retrieveIECore(const std::string& id, std::map<std::string, std::shared_ptr<InferenceEngine::Core> >& cores)
+{
+    AutoLock lock(getInitializationMutex());
+    std::map<std::string, std::shared_ptr<InferenceEngine::Core> >::iterator i = cores.find(id);
+    if (i == cores.end())
+    {
+        std::shared_ptr<InferenceEngine::Core> core = std::make_shared<InferenceEngine::Core>();
+        cores[id] = core;
+        return *core.get();
+    }
+    return *(i->second).get();
+}
+static InferenceEngine::Core& create_IE_Core_instance(const std::string& id)
+{
+    static std::map<std::string, std::shared_ptr<InferenceEngine::Core> > cores;
+    return retrieveIECore(id, cores);
+}
+static InferenceEngine::Core& create_IE_Core_pointer(const std::string& id)
+{
+    // load and hold IE plugins
+    static std::map<std::string, std::shared_ptr<InferenceEngine::Core> >* cores =
+            new std::map<std::string, std::shared_ptr<InferenceEngine::Core> >();
+    return retrieveIECore(id, *cores);
+}
+InferenceEngine::Core& getCore(const std::string& id)
+{
+    // to make happy memory leak tools use:
+    // - OPENCV_DNN_INFERENCE_ENGINE_HOLD_PLUGINS=0
+    // - OPENCV_DNN_INFERENCE_ENGINE_CORE_LIFETIME_WORKAROUND=0
+    static bool param_DNN_INFERENCE_ENGINE_HOLD_PLUGINS = utils::getConfigurationParameterBool("OPENCV_DNN_INFERENCE_ENGINE_HOLD_PLUGINS", true);
+    static bool init_IE_plugins_ = param_DNN_INFERENCE_ENGINE_HOLD_PLUGINS && init_IE_plugins(); CV_UNUSED(init_IE_plugins_);
+
+    static bool param_DNN_INFERENCE_ENGINE_CORE_LIFETIME_WORKAROUND =
+            utils::getConfigurationParameterBool("OPENCV_DNN_INFERENCE_ENGINE_CORE_LIFETIME_WORKAROUND",
+#ifdef _WIN32
+                true
+#else
+                false
+#endif
+            );
+
+    InferenceEngine::Core& core = param_DNN_INFERENCE_ENGINE_CORE_LIFETIME_WORKAROUND
+            ? create_IE_Core_pointer(id)
+            : create_IE_Core_instance(id);
     return core;
 }
 #endif
 
-#if !defined(OPENCV_DNN_IE_VPU_TYPE_DEFAULT)
-static bool detectMyriadX_()
+static bool detectArmPlugin_()
 {
+    InferenceEngine::Core& ie = getCore("CPU");
+    const std::vector<std::string> devices = ie.GetAvailableDevices();
+    for (std::vector<std::string>::const_iterator i = devices.begin(); i != devices.end(); ++i)
+    {
+        if (i->find("CPU") != std::string::npos)
+        {
+            const std::string name = ie.GetMetric(*i, METRIC_KEY(FULL_DEVICE_NAME)).as<std::string>();
+            CV_LOG_INFO(NULL, "CPU plugin: " << name);
+            return name.find("arm_compute::NEON") != std::string::npos;
+        }
+    }
+    return false;
+}
+
+#if !defined(OPENCV_DNN_IE_VPU_TYPE_DEFAULT)
+static bool detectMyriadX_(std::string device)
+{
+    AutoLock lock(getInitializationMutex());
+#if INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2019R3)
+    // Lightweight detection
+    InferenceEngine::Core& ie = getCore(device);
+    const std::vector<std::string> devices = ie.GetAvailableDevices();
+    for (std::vector<std::string>::const_iterator i = devices.begin(); i != devices.end(); ++i)
+    {
+        if (i->find(device) != std::string::npos)
+        {
+            const std::string name = ie.GetMetric(*i, METRIC_KEY(FULL_DEVICE_NAME)).as<std::string>();
+            CV_LOG_INFO(NULL, "Myriad device: " << name);
+            return name.find("MyriadX") != std::string::npos || name.find("Myriad X") != std::string::npos || name.find("HDDL") != std::string::npos;
+        }
+    }
+    return false;
+#else
     InferenceEngine::Builder::Network builder("");
     InferenceEngine::idx_t inpId = builder.addLayer(
                                    InferenceEngine::Builder::InputLayer().setPort(InferenceEngine::Port({1})));
@@ -547,15 +721,14 @@ static bool detectMyriadX_()
 #if INF_ENGINE_VER_MAJOR_LE(INF_ENGINE_RELEASE_2019R1)
     InferenceEngine::InferenceEnginePluginPtr enginePtr;
     {
-        AutoLock lock(getInitializationMutex());
         auto& sharedPlugins = getSharedPlugins();
-        auto pluginIt = sharedPlugins.find("MYRIAD");
+        auto pluginIt = sharedPlugins.find(device);
         if (pluginIt != sharedPlugins.end()) {
             enginePtr = pluginIt->second;
         } else {
             auto dispatcher = InferenceEngine::PluginDispatcher({""});
-            enginePtr = dispatcher.getPluginByDevice("MYRIAD");
-            sharedPlugins["MYRIAD"] = enginePtr;
+            enginePtr = dispatcher.getPluginByDevice(device);
+            sharedPlugins[device] = enginePtr;
         }
     }
     auto plugin = InferenceEngine::InferencePlugin(enginePtr);
@@ -565,15 +738,23 @@ static bool detectMyriadX_()
 #else
     try
     {
-        auto netExec = getCore().LoadNetwork(cnn, "MYRIAD", {{"VPU_PLATFORM", "VPU_2480"}});
+#if INF_ENGINE_VER_MAJOR_LE(INF_ENGINE_RELEASE_2019R3)
+        auto netExec = getCore(device).LoadNetwork(cnn, device, {{"VPU_PLATFORM", "VPU_2480"}});
+#else
+        auto netExec = getCore(device).LoadNetwork(cnn, device, {{"VPU_MYRIAD_PLATFORM", "VPU_MYRIAD_2480"}});
+#endif
 #endif
         auto infRequest = netExec.CreateInferRequest();
     } catch(...) {
         return false;
     }
     return true;
+#endif
 }
 #endif  // !defined(OPENCV_DNN_IE_VPU_TYPE_DEFAULT)
+
+
+#ifdef HAVE_DNN_IE_NN_BUILDER_2019
 
 void InfEngineBackendNet::initPlugin(InferenceEngine::CNNNetwork& net)
 {
@@ -591,7 +772,7 @@ void InfEngineBackendNet::initPlugin(InferenceEngine::CNNNetwork& net)
         }
         else
 #else
-        InferenceEngine::Core& ie = getCore();
+        InferenceEngine::Core& ie = getCore(device_name);
 #endif
         {
 #if INF_ENGINE_VER_MAJOR_LE(INF_ENGINE_RELEASE_2019R1)
@@ -661,20 +842,27 @@ void InfEngineBackendNet::initPlugin(InferenceEngine::CNNNetwork& net)
             // Some of networks can work without a library of extra layers.
 #if INF_ENGINE_VER_MAJOR_GT(INF_ENGINE_RELEASE_2019R1)
             // OpenCV fallbacks as extensions.
-            ie.AddExtension(std::make_shared<InfEngineExtension>(), "CPU");
+            try
+            {
+                ie.AddExtension(std::make_shared<InfEngineExtension>(), "CPU");
+            }
+            catch(const std::exception& e)
+            {
+                CV_LOG_INFO(NULL, "DNN-IE: Can't register OpenCV custom layers extension: " << e.what());
+            }
 #endif
-#ifndef _WIN32
             // Limit the number of CPU threads.
 #if INF_ENGINE_VER_MAJOR_LE(INF_ENGINE_RELEASE_2019R1)
+#ifndef _WIN32
             enginePtr->SetConfig({{
                 InferenceEngine::PluginConfigParams::KEY_CPU_THREADS_NUM, format("%d", getNumThreads()),
             }}, 0);
+#endif  // _WIN32
 #else
             if (device_name == "CPU")
                 ie.SetConfig({{
                     InferenceEngine::PluginConfigParams::KEY_CPU_THREADS_NUM, format("%d", getNumThreads()),
                 }}, device_name);
-#endif
 #endif
         }
 #if INF_ENGINE_VER_MAJOR_LE(INF_ENGINE_RELEASE_2019R1)
@@ -689,11 +877,16 @@ void InfEngineBackendNet::initPlugin(InferenceEngine::CNNNetwork& net)
             {
                 if (layer->type == kOpenCVLayersType)
                 {
-                    layer->affinity = "CPU";
                     isHetero = true;
+#if INF_ENGINE_VER_MAJOR_LT(INF_ENGINE_RELEASE_2019R3)
+                    // Not sure about lower versions but in 2019R3 we do not need this
+                    layer->affinity = "CPU";
                 }
                 else
+                {
                     layer->affinity = device_name;
+#endif
+                }
             }
         }
         if (isHetero)
@@ -704,7 +897,7 @@ void InfEngineBackendNet::initPlugin(InferenceEngine::CNNNetwork& net)
     }
     catch (const std::exception& ex)
     {
-        CV_Error(Error::StsAssert, format("Failed to initialize Inference Engine backend: %s", ex.what()));
+        CV_Error(Error::StsError, format("Failed to initialize Inference Engine backend (device = %s): %s", device_name.c_str(), ex.what()));
     }
 }
 
@@ -715,6 +908,13 @@ bool InfEngineBackendNet::isInitialized()
 #else
     return isInit;
 #endif
+}
+
+void InfEngineBackendNet::reset()
+{
+    allBlobs.clear();
+    infRequests.clear();
+    isInit = false;
 }
 
 void InfEngineBackendNet::addBlobs(const std::vector<cv::Ptr<BackendWrapper> >& ptrs)
@@ -744,6 +944,7 @@ void InfEngineBackendNet::InfEngineReqWrapper::makePromises(const std::vector<Pt
 void InfEngineBackendNet::forward(const std::vector<Ptr<BackendWrapper> >& outBlobsWrappers,
                                   bool isAsync)
 {
+    CV_LOG_DEBUG(NULL, "InfEngineBackendNet::forward(" << (isAsync ? "async" : "sync") << ")");
     // Look for finished requests.
     Ptr<InfEngineReqWrapper> reqWrapper;
     for (auto& wrapper : infRequests)
@@ -791,6 +992,8 @@ void InfEngineBackendNet::forward(const std::vector<Ptr<BackendWrapper> >& outBl
         infRequestPtr->SetCompletionCallback(
             [](InferenceEngine::IInferRequest::Ptr request, InferenceEngine::StatusCode status)
             {
+                CV_LOG_DEBUG(NULL, "DNN(IE): completionCallback(" << (int)status << ")");
+
                 InfEngineReqWrapper* wrapper;
                 request->GetUserData((void**)&wrapper, 0);
                 CV_Assert(wrapper && "Internal error");
@@ -858,32 +1061,6 @@ void InfEngineBackendNet::forward(const std::vector<Ptr<BackendWrapper> >& outBl
     }
 }
 
-Mat infEngineBlobToMat(const InferenceEngine::Blob::Ptr& blob)
-{
-    // NOTE: Inference Engine sizes are reversed.
-    std::vector<size_t> dims = blob->getTensorDesc().getDims();
-    std::vector<int> size(dims.begin(), dims.end());
-    auto precision = blob->getTensorDesc().getPrecision();
-
-    int type = -1;
-    switch (precision)
-    {
-        case InferenceEngine::Precision::FP32: type = CV_32F; break;
-        case InferenceEngine::Precision::U8: type = CV_8U; break;
-        default:
-            CV_Error(Error::StsNotImplemented, "Unsupported blob precision");
-    }
-    return Mat(size, type, (void*)blob->buffer());
-}
-
-void infEngineBlobsToMats(const std::vector<InferenceEngine::Blob::Ptr>& blobs,
-                          std::vector<Mat>& mats)
-{
-    mats.resize(blobs.size());
-    for (int i = 0; i < blobs.size(); ++i)
-        mats[i] = infEngineBlobToMat(blobs[i]);
-}
-
 bool InfEngineBackendLayer::getMemoryShapes(const std::vector<MatShape> &inputs,
                                             const int requiredOutputs,
                                             std::vector<MatShape> &outputs,
@@ -916,8 +1093,9 @@ bool InfEngineBackendLayer::getMemoryShapes(const std::vector<MatShape> &inputs,
 
 bool InfEngineBackendLayer::supportBackend(int backendId)
 {
+    CV_LOG_DEBUG(NULL, "InfEngineBackendLayer::supportBackend(" << backendId << ")");
     return backendId == DNN_BACKEND_DEFAULT ||
-           (backendId == DNN_BACKEND_INFERENCE_ENGINE && haveInfEngine());
+           (backendId == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019);
 }
 
 void InfEngineBackendLayer::forward(InputArrayOfArrays inputs, OutputArrayOfArrays outputs,
@@ -949,6 +1127,8 @@ void addConstantData(const std::string& name, InferenceEngine::Blob::Ptr data,
 #endif
 }
 
+#endif // HAVE_DNN_IE_NN_BUILDER_2019
+
 #endif  // HAVE_INF_ENGINE
 
 bool haveInfEngine()
@@ -964,11 +1144,13 @@ void forwardInfEngine(const std::vector<Ptr<BackendWrapper> >& outBlobsWrappers,
                       Ptr<BackendNode>& node, bool isAsync)
 {
     CV_Assert(haveInfEngine());
-#ifdef HAVE_INF_ENGINE
+#ifdef HAVE_DNN_IE_NN_BUILDER_2019
     CV_Assert(!node.empty());
     Ptr<InfEngineBackendNode> ieNode = node.dynamicCast<InfEngineBackendNode>();
     CV_Assert(!ieNode.empty());
     ieNode->net->forward(outBlobsWrappers, isAsync);
+#else
+    CV_Error(Error::StsNotImplemented, "This OpenCV version is built without Inference Engine NN Builder API support");
 #endif  // HAVE_INF_ENGINE
 }
 
@@ -981,8 +1163,33 @@ void resetMyriadDevice()
 #if INF_ENGINE_VER_MAJOR_LE(INF_ENGINE_RELEASE_2019R1)
     getSharedPlugins().erase("MYRIAD");
 #else
-    // To unregister both "MYRIAD" and "HETERO:MYRIAD,CPU" plugins
-    getCore() = InferenceEngine::Core();
+    // Unregister both "MYRIAD" and "HETERO:MYRIAD,CPU" plugins
+    InferenceEngine::Core& ie = getCore("MYRIAD");
+    try
+    {
+        ie.UnregisterPlugin("MYRIAD");
+        ie.UnregisterPlugin("HETERO");
+    }
+    catch (...) {}
+#endif
+#endif  // HAVE_INF_ENGINE
+}
+
+void releaseHDDLPlugin()
+{
+#ifdef HAVE_INF_ENGINE
+    AutoLock lock(getInitializationMutex());
+#if INF_ENGINE_VER_MAJOR_LE(INF_ENGINE_RELEASE_2019R1)
+    getSharedPlugins().erase("HDDL");
+#else
+    // Unregister both "HDDL" and "HETERO:HDDL,CPU" plugins
+    InferenceEngine::Core& ie = getCore("HDDL");
+    try
+    {
+        ie.UnregisterPlugin("HDDL");
+        ie.UnregisterPlugin("HETERO");
+    }
+    catch (...) {}
 #endif
 #endif  // HAVE_INF_ENGINE
 }
@@ -990,8 +1197,14 @@ void resetMyriadDevice()
 #ifdef HAVE_INF_ENGINE
 bool isMyriadX()
 {
-     static bool myriadX = getInferenceEngineVPUType() == CV_DNN_INFERENCE_ENGINE_VPU_TYPE_MYRIAD_X;
-     return myriadX;
+    static bool myriadX = getInferenceEngineVPUType() == CV_DNN_INFERENCE_ENGINE_VPU_TYPE_MYRIAD_X;
+    return myriadX;
+}
+
+bool isArmComputePlugin()
+{
+    static bool armPlugin = getInferenceEngineCPUType() == CV_DNN_INFERENCE_ENGINE_CPU_TYPE_ARM_COMPUTE;
+    return armPlugin;
 }
 
 static std::string getInferenceEngineVPUType_()
@@ -1002,10 +1215,11 @@ static std::string getInferenceEngineVPUType_()
 #if defined(OPENCV_DNN_IE_VPU_TYPE_DEFAULT)
         param_vpu_type = OPENCV_DNN_IE_VPU_TYPE_DEFAULT;
 #else
-        CV_LOG_INFO(NULL, "OpenCV-DNN: running Inference Engine VPU autodetection: Myriad2/X. In case of other accelerator types specify 'OPENCV_DNN_IE_VPU_TYPE' parameter");
+        CV_LOG_INFO(NULL, "OpenCV-DNN: running Inference Engine VPU autodetection: Myriad2/X or HDDL. In case of other accelerator types specify 'OPENCV_DNN_IE_VPU_TYPE' parameter");
         try {
-            bool isMyriadX_ = detectMyriadX_();
-            if (isMyriadX_)
+            bool isMyriadX_ = detectMyriadX_("MYRIAD");
+            bool isHDDL_ = detectMyriadX_("HDDL");
+            if (isMyriadX_ || isHDDL_)
             {
                 param_vpu_type = CV_DNN_INFERENCE_ENGINE_VPU_TYPE_MYRIAD_X;
             }
@@ -1030,8 +1244,32 @@ cv::String getInferenceEngineVPUType()
     static cv::String vpu_type = getInferenceEngineVPUType_();
     return vpu_type;
 }
+
+cv::String getInferenceEngineCPUType()
+{
+    static cv::String cpu_type = detectArmPlugin_() ?
+                                 CV_DNN_INFERENCE_ENGINE_CPU_TYPE_ARM_COMPUTE :
+                                 CV_DNN_INFERENCE_ENGINE_CPU_TYPE_X86;
+    return cpu_type;
+}
+
 #else  // HAVE_INF_ENGINE
+
+cv::String getInferenceEngineBackendType()
+{
+    CV_Error(Error::StsNotImplemented, "This OpenCV build doesn't include InferenceEngine support");
+}
+cv::String setInferenceEngineBackendType(const cv::String& newBackendType)
+{
+    CV_UNUSED(newBackendType);
+    CV_Error(Error::StsNotImplemented, "This OpenCV build doesn't include InferenceEngine support");
+}
 cv::String getInferenceEngineVPUType()
+{
+    CV_Error(Error::StsNotImplemented, "This OpenCV build doesn't include InferenceEngine support");
+}
+
+cv::String getInferenceEngineCPUType()
 {
     CV_Error(Error::StsNotImplemented, "This OpenCV build doesn't include InferenceEngine support");
 }

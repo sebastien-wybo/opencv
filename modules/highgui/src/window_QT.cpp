@@ -54,9 +54,12 @@
 #include <unistd.h>
 #endif
 
+// Get GL_PERSPECTIVE_CORRECTION_HINT definition, not available in GLES 2 or
+// OpenGL 3 core profile or later
 #ifdef HAVE_QT_OPENGL
-    #if defined Q_WS_X11 /* Qt4 */ || defined Q_OS_LINUX /* Qt5 */
-        #include <GL/glx.h>
+    #if defined Q_WS_X11 /* Qt4 */ || \
+        (!defined(QT_OPENGL_ES_2) && defined Q_OS_LINUX) /* Qt5 with desktop OpenGL */
+        #include <GL/gl.h>
     #endif
 #endif
 
@@ -1216,9 +1219,6 @@ void GuiReceiver::addSlider2(QString bar_name, QString window_name, void* value,
     if (t) //trackbar exists
         return;
 
-    if (!value)
-        CV_Error(CV_StsNullPtr, "NULL value pointer" );
-
     if (count <= 0) //count is the max value of the slider, so must be bigger than 0
         CV_Error(CV_StsNullPtr, "Max value of the slider must be bigger than 0" );
 
@@ -1339,7 +1339,8 @@ void CvTrackbar::create(CvWindow* arg, QString name, int* value, int _count)
     slider->setMinimum(0);
     slider->setMaximum(_count);
     slider->setPageStep(5);
-    slider->setValue(*value);
+    if (dataSlider)
+        slider->setValue(*dataSlider);
     slider->setTickPosition(QSlider::TicksBelow);
 
 
@@ -1406,7 +1407,8 @@ void CvTrackbar::update(int myvalue)
 {
     setLabel(myvalue);
 
-    *dataSlider = myvalue;
+    if (dataSlider)
+        *dataSlider = myvalue;
     if (callback)
     {
         callback(myvalue);
@@ -1853,7 +1855,7 @@ void CvWindow::displayStatusBar(QString text, int delayms)
 void CvWindow::enablePropertiesButton()
 {
     if (!vect_QActions.empty())
-        vect_QActions[9]->setDisabled(false);
+        vect_QActions[10]->setDisabled(false);
 }
 
 
@@ -1988,7 +1990,7 @@ void CvWindow::createView()
 
 void CvWindow::createActions()
 {
-    vect_QActions.resize(10);
+    vect_QActions.resize(11);
 
     QWidget* view = myView->getWidget();
 
@@ -2029,18 +2031,22 @@ void CvWindow::createActions()
     vect_QActions[8]->setIconVisibleInMenu(true);
     QObject::connect(vect_QActions[8], SIGNAL(triggered()), view, SLOT(saveView()));
 
-    vect_QActions[9] = new QAction(QIcon(":/properties-icon"), "Display properties window (CTRL+P)", this);
+    vect_QActions[9] = new QAction(QIcon(":/copy_clipbrd-icon"), "Copy image to clipboard (CTRL+C)", this);
     vect_QActions[9]->setIconVisibleInMenu(true);
-    QObject::connect(vect_QActions[9], SIGNAL(triggered()), this, SLOT(displayPropertiesWin()));
+    QObject::connect(vect_QActions[9], SIGNAL(triggered()), view, SLOT(copy2Clipbrd()));
+
+    vect_QActions[10] = new QAction(QIcon(":/properties-icon"), "Display properties window (CTRL+P)", this);
+    vect_QActions[10]->setIconVisibleInMenu(true);
+    QObject::connect(vect_QActions[10], SIGNAL(triggered()), this, SLOT(displayPropertiesWin()));
 
     if (global_control_panel->myLayout->count() == 0)
-        vect_QActions[9]->setDisabled(true);
+        vect_QActions[10]->setDisabled(true);
 }
 
 
 void CvWindow::createShortcuts()
 {
-    vect_QShortcuts.resize(10);
+    vect_QShortcuts.resize(11);
 
     QWidget* view = myView->getWidget();
 
@@ -2071,8 +2077,11 @@ void CvWindow::createShortcuts()
     vect_QShortcuts[8] = new QShortcut(shortcut_save_img, this);
     QObject::connect(vect_QShortcuts[8], SIGNAL(activated()), view, SLOT(saveView()));
 
-    vect_QShortcuts[9] = new QShortcut(shortcut_properties_win, this);
-    QObject::connect(vect_QShortcuts[9], SIGNAL(activated()), this, SLOT(displayPropertiesWin()));
+    vect_QShortcuts[9] = new QShortcut(shortcut_copy_clipbrd, this);
+    QObject::connect(vect_QShortcuts[9], SIGNAL(activated()), view, SLOT(copy2Clipbrd()));
+
+    vect_QShortcuts[10] = new QShortcut(shortcut_properties_win, this);
+    QObject::connect(vect_QShortcuts[10], SIGNAL(activated()), this, SLOT(displayPropertiesWin()));
 }
 
 
@@ -2694,6 +2703,18 @@ void DefaultViewPort::saveView()
 }
 
 
+//copy image to clipboard
+void DefaultViewPort::copy2Clipbrd()
+{
+    // Create a new pixmap to render the viewport into
+    QPixmap viewportPixmap(viewport()->size());
+    viewport()->render(&viewportPixmap);
+
+    QClipboard *pClipboard = QApplication::clipboard();
+    pClipboard->setPixmap(viewportPixmap);
+}
+
+
 void DefaultViewPort::contextMenuEvent(QContextMenuEvent* evnt)
 {
     if (centralWidget->vect_QActions.size() > 0)
@@ -3225,7 +3246,9 @@ void OpenGlViewPort::updateGl()
 
 void OpenGlViewPort::initializeGL()
 {
+#ifdef GL_PERSPECTIVE_CORRECTION_HINT
     glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
+#endif
 }
 
 void OpenGlViewPort::resizeGL(int w, int h)

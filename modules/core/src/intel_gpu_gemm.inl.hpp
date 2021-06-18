@@ -25,9 +25,8 @@
 #ifdef HAVE_OPENCL
 
 #include <sstream>
-#include "precomp.hpp"
 #include "opencl_kernels_core.hpp"
-#include "opencv2/core/opencl/runtime/opencl_clamdblas.hpp"
+#include "opencv2/core/opencl/runtime/opencl_clblas.hpp"
 #include "opencv2/core/opencl/runtime/opencl_core.hpp"
 
 namespace cv
