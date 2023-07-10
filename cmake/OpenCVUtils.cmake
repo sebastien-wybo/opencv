@@ -868,6 +868,7 @@ macro(ocv_check_modules define)
           list(APPEND _libs_paths ${CMAKE_MATCH_1})
         elseif(IS_ABSOLUTE "${flag}"
             OR flag STREQUAL "-lstdc++"
+            OR flag STREQUAL "-latomic"
         )
           list(APPEND _libs "${flag}")
         elseif(flag MATCHES "^-l(.*)")
@@ -1093,6 +1094,18 @@ macro(ocv_list_filterout lst regex)
     endif()
   endforeach()
 endmacro()
+
+# Usage: ocv_list_filterout_ex(list_name regex1 regex2 ...)
+macro(ocv_list_filterout_ex lst)
+  foreach(regex ${ARGN})
+    foreach(item ${${lst}})
+      if(item MATCHES "${regex}")
+        list(REMOVE_ITEM ${lst} "${item}")
+      endif()
+    endforeach()
+  endforeach()
+endmacro()
+
 
 # filter matching elements from the list
 macro(ocv_list_filter lst regex)
@@ -1481,8 +1494,8 @@ function(ocv_target_link_libraries target)
       if(NOT LINK_PENDING STREQUAL "")
         __ocv_push_target_link_libraries(${LINK_MODE} ${LINK_PENDING})
         set(LINK_PENDING "")
-        set(LINK_MODE "${dep}")
       endif()
+      set(LINK_MODE "${dep}")
     else()
       if(BUILD_opencv_world)
         if(OPENCV_MODULE_${dep}_IS_PART_OF_WORLD)
@@ -1617,6 +1630,30 @@ function(ocv_add_external_target name inc link def)
   )
     install(TARGETS ocv.3rdparty.${name} EXPORT OpenCVModules)
   endif()
+endfunction()
+
+function(ocv_install_used_external_targets)
+  if(NOT BUILD_SHARED_LIBS
+      AND NOT (CMAKE_VERSION VERSION_LESS "3.13.0")  # upgrade CMake: https://gitlab.kitware.com/cmake/cmake/-/merge_requests/2152
+  )
+    foreach(tgt in ${ARGN})
+      if(tgt MATCHES "^ocv\.3rdparty\.")
+        install(TARGETS ${tgt} EXPORT OpenCVModules)
+      endif()
+    endforeach()
+  endif()
+endfunction()
+
+# Returns the first non-interface target
+function(ocv_get_imported_target imported interface)
+  set(__result "${interface}")
+  get_target_property(__type "${__result}" TYPE)
+  if(__type STREQUAL "INTERFACE_LIBRARY")
+    get_target_property(__libs "${__result}" INTERFACE_LINK_LIBRARIES)
+    list(GET __libs 0 __interface)
+    ocv_get_imported_target(__result "${__interface}")
+  endif()
+  set(${imported} "${__result}" PARENT_SCOPE)
 endfunction()
 
 
@@ -1973,3 +2010,9 @@ if(NOT BUILD_SHARED_LIBS AND (CMAKE_VERSION VERSION_LESS "3.14.0"))
 else()
   ocv_update(OPENCV_3RDPARTY_EXCLUDE_FROM_ALL "EXCLUDE_FROM_ALL")
 endif()
+
+
+#
+# Include configuration override settings
+#
+include("${CMAKE_CURRENT_LIST_DIR}/vars/EnableModeVars.cmake")

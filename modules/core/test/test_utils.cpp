@@ -8,8 +8,11 @@
 #include "opencv2/core/utils/logger.hpp"
 #include "opencv2/core/utils/buffer_area.private.hpp"
 
-#include "test_utils_tls.impl.hpp"
 #include "opencv2/core/utils/filesystem.private.hpp"
+
+#ifndef OPENCV_DISABLE_THREAD_SUPPORT
+#include "test_utils_tls.impl.hpp"
+#endif
 
 namespace opencv_test { namespace {
 
@@ -405,9 +408,6 @@ TEST_P(BufferArea, basic)
             EXPECT_EQ((double)0, dbl_ptr[i]);
         }
     }
-    EXPECT_TRUE(int_ptr == NULL);
-    EXPECT_TRUE(uchar_ptr == NULL);
-    EXPECT_TRUE(dbl_ptr == NULL);
 }
 
 TEST_P(BufferArea, align)
@@ -443,10 +443,6 @@ TEST_P(BufferArea, align)
                     << " (element size: " << sizeof(T) << ")";
             }
         }
-    }
-    for (size_t i = 0; i < CNT; ++i)
-    {
-        EXPECT_TRUE(buffers[i] == NULL);
     }
 }
 

@@ -339,7 +339,7 @@ template <typename ET, typename FT, int n, bool mulall, int cncnt>
 static void hlineResizeCn(ET* src, int cn, int *ofst, FT* m, FT* dst, int dst_min, int dst_max, int dst_width)
 {
     hline<ET, FT, n, mulall, cncnt>::ResizeCn(src, cn, ofst, m, dst, dst_min, dst_max, dst_width);
-};
+}
 
 template <>
 void hlineResizeCn<uint8_t, ufixedpoint16, 2, true, 1>(uint8_t* src, int, int *ofst, ufixedpoint16* m, ufixedpoint16* dst, int dst_min, int dst_max, int dst_width)
@@ -1096,6 +1096,16 @@ resizeNN( const Mat& src, Mat& dst, double fx, double fy )
             opt_SSE4_1::resizeNN2_SSE4_1(range, src, dst, x_ofs, ify);
         else
             opt_SSE4_1::resizeNN4_SSE4_1(range, src, dst, x_ofs, ify);
+    }
+    else
+#endif
+#if CV_TRY_LASX
+    if(CV_CPU_HAS_SUPPORT_LASX && ((pix_size == 2) || (pix_size == 4)))
+    {
+        if(pix_size == 2)
+            opt_LASX::resizeNN2_LASX(range, src, dst, x_ofs, ify);
+        else
+            opt_LASX::resizeNN4_LASX(range, src, dst, x_ofs, ify);
     }
     else
 #endif
@@ -3191,7 +3201,7 @@ static int computeResizeAreaTab( int ssize, int dsize, int cn, double scale, Dec
 
         if( sx1 - fsx1 > 1e-3 )
         {
-            assert( k < ssize*2 );
+            CV_Assert( k < ssize*2 );
             tab[k].di = dx * cn;
             tab[k].si = (sx1 - 1) * cn;
             tab[k++].alpha = (float)((sx1 - fsx1) / cellWidth);
@@ -3199,7 +3209,7 @@ static int computeResizeAreaTab( int ssize, int dsize, int cn, double scale, Dec
 
         for(int sx = sx1; sx < sx2; sx++ )
         {
-            assert( k < ssize*2 );
+            CV_Assert( k < ssize*2 );
             tab[k].di = dx * cn;
             tab[k].si = sx * cn;
             tab[k++].alpha = float(1.0 / cellWidth);
@@ -3207,7 +3217,7 @@ static int computeResizeAreaTab( int ssize, int dsize, int cn, double scale, Dec
 
         if( fsx2 - sx2 > 1e-3 )
         {
-            assert( k < ssize*2 );
+            CV_Assert( k < ssize*2 );
             tab[k].di = dx * cn;
             tab[k].si = sx2 * cn;
             tab[k++].alpha = (float)(std::min(std::min(fsx2 - sx2, 1.), cellWidth) / cellWidth);
@@ -3376,7 +3386,8 @@ static bool ocl_resize( InputArray _src, OutputArray _dst, Size dsize,
         }
         else
         {
-            int wdepth = std::max(depth, CV_32S), wtype = CV_MAKETYPE(wdepth, cn);
+            int wdepth = depth <= CV_8S ? CV_32S : std::max(depth, CV_32F);
+            int wtype = CV_MAKETYPE(wdepth, cn);
             k.create("resizeLN", ocl::imgproc::resize_oclsrc,
                      format("-D INTER_LINEAR -D depth=%d -D T=%s -D T1=%s "
                             "-D WT=%s -D convertToWT=%s -D convertToDT=%s -D cn=%d "
@@ -3899,7 +3910,7 @@ void resize(int src_type,
             {
                 if( k == 0 || ytab[k].di != ytab[k-1].di )
                 {
-                    assert( ytab[k].di == dy );
+                    CV_Assert( ytab[k].di == dy );
                     tabofs[dy++] = k;
                 }
             }

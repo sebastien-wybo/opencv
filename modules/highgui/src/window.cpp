@@ -366,6 +366,8 @@ CV_IMPL double cvGetWindowProperty(const char* name, int prop_id)
             return cvGetPropVisible_QT(name);
         #elif defined(HAVE_WIN32UI)
             return cvGetPropVisible_W32(name);
+        #elif defined(HAVE_COCOA)
+            return cvGetPropVisible_COCOA(name);
         #else
             return -1;
         #endif
@@ -399,13 +401,13 @@ CV_IMPL double cvGetWindowProperty(const char* name, int prop_id)
 #endif
 }
 
-cv::Rect cvGetWindowImageRect(const char* name)
+cv::Rect cv::getWindowImageRect(const String& winname)
 {
     CV_TRACE_FUNCTION();
-    CV_Assert(name);
+    CV_Assert(!winname.empty());
 
     {
-        auto window = findWindow_(name);
+        auto window = findWindow_(winname);
         if (window)
         {
             return window->getImageRect();
@@ -416,7 +418,7 @@ cv::Rect cvGetWindowImageRect(const char* name)
     auto backend = getCurrentUIBackend();
     if (backend)
     {
-        CV_LOG_WARNING(NULL, "Can't find window with name: '" << name << "'. Do nothing");
+        CV_LOG_WARNING(NULL, "Can't find window with name: '" << winname << "'. Do nothing");
         CV_NOT_FOUND_DEPRECATION;
     }
     else
@@ -427,24 +429,18 @@ cv::Rect cvGetWindowImageRect(const char* name)
 #else
 
     #if defined (HAVE_QT)
-        return cvGetWindowRect_QT(name);
+        return cvGetWindowRect_QT(winname.c_str());
     #elif defined(HAVE_WIN32UI)
-        return cvGetWindowRect_W32(name);
+        return cvGetWindowRect_W32(winname.c_str());
     #elif defined (HAVE_GTK)
-        return cvGetWindowRect_GTK(name);
+        return cvGetWindowRect_GTK(winname.c_str());
     #elif defined (HAVE_COCOA)
-        return cvGetWindowRect_COCOA(name);
+        return cvGetWindowRect_COCOA(winname.c_str());
     #else
         return Rect(-1, -1, -1, -1);
     #endif
 
 #endif
-}
-
-cv::Rect cv::getWindowImageRect(const String& winname)
-{
-    CV_TRACE_FUNCTION();
-    return cvGetWindowImageRect(winname.c_str());
 }
 
 void cv::namedWindow( const String& winname, int flags )
@@ -586,6 +582,48 @@ void cv::moveWindow( const String& winname, int x, int y )
 #endif
 }
 
+void cv::setWindowTitle(const String& winname, const String& title)
+{
+    CV_TRACE_FUNCTION();
+
+    {
+        cv::AutoLock lock(cv::getWindowMutex());
+        auto window = findWindow_(winname);
+        if (window)
+        {
+            return window->setTitle(title);
+        }
+    }
+
+#if defined(OPENCV_HIGHGUI_WITHOUT_BUILTIN_BACKEND) && defined(ENABLE_PLUGINS)
+    auto backend = getCurrentUIBackend();
+    if (backend)
+    {
+        CV_LOG_WARNING(NULL, "Can't find window with name: '" << winname << "'. Do nothing");
+        CV_NOT_FOUND_DEPRECATION;
+    }
+    else
+    {
+        CV_LOG_WARNING(NULL, "No UI backends available. Use OPENCV_LOG_LEVEL=DEBUG for investigation");
+    }
+    return;
+#elif defined(HAVE_WIN32UI)
+    return setWindowTitle_W32(winname, title);
+#elif defined (HAVE_GTK)
+    return setWindowTitle_GTK(winname, title);
+#elif defined (HAVE_QT)
+    return setWindowTitle_QT(winname, title);
+#elif defined (HAVE_COCOA)
+    return setWindowTitle_COCOA(winname, title);
+#elif defined (HAVE_WAYLAND)
+    return setWindowTitle_WAYLAND(winname, title);
+#else
+    CV_Error(Error::StsNotImplemented, "The function is not implemented. "
+        "Rebuild the library with Windows, GTK+ 2.x or Cocoa support. "
+        "If you are on Ubuntu or Debian, install libgtk2.0-dev and pkg-config, then re-run cmake or configure script");
+#endif
+}
+
 void cv::setWindowProperty(const String& winname, int prop_id, double prop_value)
 {
     CV_TRACE_FUNCTION();
@@ -630,9 +668,9 @@ int cv::waitKey(int delay)
     return (code != -1) ? (code & 0xff) : -1;
 }
 
-#if defined(HAVE_QT) || (defined (WINRT) && !defined (WINRT_8_0)) || \
-    !defined(HAVE_WIN32UI) && (defined(HAVE_GTK) || defined(HAVE_COCOA))
-// pollKey() fallback implementation
+/*
+ * process until queue is empty but don't wait.
+ */
 int cv::pollKey()
 {
     CV_TRACE_FUNCTION();
@@ -646,12 +684,13 @@ int cv::pollKey()
         }
     }
 
+#if defined(HAVE_WIN32UI)
+    return pollKey_W32();
+#else
     // fallback. please implement a proper polling function
     return cvWaitKey(1);
-}
-#elif defined(HAVE_WIN32UI)
-// pollKey() implemented in window_w32.cpp
 #endif
+}
 
 int cv::createTrackbar(const String& trackbarName, const String& winName,
                    int* value, int count, TrackbarCallback callback,
@@ -928,6 +967,8 @@ void cv::imshow( const String& winname, InputArray _img )
 {
     CV_TRACE_FUNCTION();
 
+    const Size size = _img.size();
+    CV_Assert(size.width>0 && size.height>0);
     {
         cv::AutoLock lock(cv::getWindowMutex());
         cleanupClosedWindows_();
@@ -949,7 +990,7 @@ void cv::imshow( const String& winname, InputArray _img )
         auto backend = getCurrentUIBackend();
         if (backend)
         {
-            auto window = backend->createWindow(winname, WINDOW_NORMAL);
+            auto window = backend->createWindow(winname, WINDOW_AUTOSIZE);
             if (!window)
             {
                 CV_LOG_ERROR(NULL, "OpenCV/UI: Can't create window: '" << winname << "'");
@@ -960,9 +1001,7 @@ void cv::imshow( const String& winname, InputArray _img )
         }
     }
 
-    const Size size = _img.size();
 #ifndef HAVE_OPENGL
-    CV_Assert(size.width>0 && size.height>0);
     {
         Mat img = _img.getMat();
         CvMat c_img = cvMat(img);
@@ -970,7 +1009,6 @@ void cv::imshow( const String& winname, InputArray _img )
     }
 #else
     const double useGl = getWindowProperty(winname, WND_PROP_OPENGL);
-    CV_Assert(size.width>0 && size.height>0);
 
     if (useGl <= 0)
     {
@@ -1192,6 +1230,7 @@ int cv::createButton(const String&, ButtonCallback, void*, int , bool )
 #elif defined (HAVE_GTK)      // see window_gtk.cpp
 #elif defined (HAVE_COCOA)    // see window_cocoa.mm
 #elif defined (HAVE_QT)       // see window_QT.cpp
+#elif defined (HAVE_WAYLAND)  // see window_wayland.cpp
 #elif defined (WINRT) && !defined (WINRT_8_0) // see window_winrt.cpp
 
 #else
@@ -1202,13 +1241,6 @@ int cv::createButton(const String&, ButtonCallback, void*, int , bool )
 // at runtime. This way people can choose to replace an installed HighGUI
 // version with a more capable one without a need to recompile dependent
 // applications or libraries.
-
-void cv::setWindowTitle(const String&, const String&)
-{
-    CV_Error(Error::StsNotImplemented, "The function is not implemented. "
-        "Rebuild the library with Windows, GTK+ 2.x or Cocoa support. "
-        "If you are on Ubuntu or Debian, install libgtk2.0-dev and pkg-config, then re-run cmake or configure script");
-}
 
 #define CV_NO_GUI_ERROR(funcname) \
     cv::error(cv::Error::StsError, \
@@ -1358,11 +1390,6 @@ CV_IMPL void cvSaveWindowParameters(const char* )
 CV_IMPL int cvCreateButton(const char*, void (*)(int, void*), void*, int, int)
 {
     CV_NO_GUI_ERROR("cvCreateButton");
-}
-
-int cv::pollKey()
-{
-    CV_NO_GUI_ERROR("cv::pollKey()");
 }
 
 #endif

@@ -6,7 +6,7 @@ ocv_add_dispatched_file(arithm SSE2 SSE4_1 AVX2 VSX3)
 ocv_add_dispatched_file(convert SSE2 AVX2 VSX3)
 ocv_add_dispatched_file(convert_scale SSE2 AVX2)
 ocv_add_dispatched_file(count_non_zero SSE2 AVX2)
-ocv_add_dispatched_file(matmul SSE2 SSE4_1 AVX2 AVX512_SKX)
+ocv_add_dispatched_file(matmul SSE2 SSE4_1 AVX2 AVX512_SKX NEON_DOTPROD)
 ocv_add_dispatched_file(mean SSE2 AVX2)
 ocv_add_dispatched_file(merge SSE2 AVX2)
 ocv_add_dispatched_file(split SSE2 AVX2)
@@ -27,6 +27,7 @@ set(PARALLEL_ENABLE_PLUGINS "${PARALLEL_ENABLE_PLUGINS_DEFAULT}" CACHE BOOL "All
 # TODO building plugins with OpenCV is not supported yet
 #set(PARALLEL_PLUGIN_LIST "" CACHE STRING "List of parallel backends to be compiled as plugins (tbb, openmp or special value 'all')")
 #string(REPLACE "," ";" PARALLEL_PLUGIN_LIST "${PARALLEL_PLUGIN_LIST}")  # support comma-separated list (,) too
+#string(TOLOWER "${PARALLEL_PLUGIN_LIST}" PARALLEL_PLUGIN_LIST)
 
 
 ocv_add_module(core
@@ -144,6 +145,8 @@ ocv_create_module(${extra_libs})
 
 ocv_target_link_libraries(${the_module} PRIVATE
     "${ZLIB_LIBRARIES}" "${OPENCL_LIBRARIES}" "${VA_LIBRARIES}"
+    "${OPENGL_LIBRARIES}"
+    "${GLX_LIBRARIES}"
     "${LAPACK_LIBRARIES}" "${CPUFEATURES_LIBRARIES}" "${HALIDE_LIBRARIES}"
     "${ITT_LIBRARIES}"
     "${OPENCV_HAL_LINKER_LIBS}"
@@ -153,8 +156,20 @@ if(OPENCV_CORE_EXCLUDE_C_API)
   ocv_target_compile_definitions(${the_module} PRIVATE "OPENCV_EXCLUDE_C_API=1")
 endif()
 
+if(OPENCV_DISABLE_THREAD_SUPPORT)
+  ocv_target_compile_definitions(${the_module} PUBLIC "OPENCV_DISABLE_THREAD_SUPPORT=1")
+endif()
+
+if(OPENCV_SEMIHOSTING)
+  ocv_target_compile_definitions(${the_module} PRIVATE "-DOPENCV_SEMIHOSTING")
+endif(OPENCV_SEMIHOSTING)
+
 if(HAVE_HPX)
   ocv_target_link_libraries(${the_module} LINK_PRIVATE "${HPX_LIBRARIES}")
+endif()
+
+if(HAVE_OPENMP AND DEFINED OpenMP_CXX_LIBRARIES AND OpenMP_CXX_LIBRARIES)
+  ocv_target_link_libraries(${the_module} LINK_PRIVATE "${OpenMP_CXX_LIBRARIES}")
 endif()
 
 ocv_add_accuracy_tests()
@@ -164,7 +179,7 @@ ocv_install_3rdparty_licenses(SoftFloat "${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/So
 
 
 # generate data (samples data) config file
-set(OPENCV_DATA_CONFIG_FILE "${CMAKE_BINARY_DIR}/opencv_data_config.hpp")
+set(OPENCV_DATA_CONFIG_FILE "${OPENCV_CONFIG_FILE_INCLUDE_DIR}/opencv_data_config.hpp")
 set(OPENCV_DATA_CONFIG_STR "")
 
 if(CMAKE_INSTALL_PREFIX)

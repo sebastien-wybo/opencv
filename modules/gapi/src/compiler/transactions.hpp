@@ -69,8 +69,8 @@ struct ChangeT
 {
     struct Base
     {
-        virtual void commit  (ade::Graph & ) {};
-        virtual void rollback(ade::Graph & ) {};
+        virtual void commit  (ade::Graph & ) {}
+        virtual void rollback(ade::Graph & ) {}
         virtual ~Base() = default;
     };
 
@@ -117,7 +117,7 @@ struct ChangeT
             {
             case Direction::In:  eh = g.link(m_sibling, m_node); break;
             case Direction::Out: eh = g.link(m_node, m_sibling); break;
-            default: GAPI_Assert(false);
+            default: GAPI_Error("InternalError");
             }
             GAPI_Assert(eh != nullptr);
             m_meta.copyTo(g, eh);

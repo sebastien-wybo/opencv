@@ -116,7 +116,7 @@ public:
 
 class P3PSolver : public MinimalSolver {
 public:
-    static Ptr<P3PSolver> create(const Mat &points_, const Mat &calib_norm_pts, const Mat &K);
+    static Ptr<P3PSolver> create(const Mat &points_, const Mat &calib_norm_pts, const Matx33d &K);
 };
 
 //-------------------------- AFFINE -----------------------
@@ -164,7 +164,7 @@ public:
 
 class DLSPnP : public NonMinimalSolver {
 public:
-    static Ptr<DLSPnP> create(const Mat &points_, const Mat &calib_norm_pts, const Mat &K);
+    static Ptr<DLSPnP> create(const Mat &points_, const Mat &calib_norm_pts, const Matx33d &K);
 };
 
 //-------------------------- AFFINE -----------------------
@@ -406,14 +406,14 @@ struct SPRT_history {
     /*
      * delta:
      * The probability of a data point being consistent
-     * with a ‘bad’ model is modeled as a probability of
+     * with a 'bad' model is modeled as a probability of
      * a random event with Bernoulli distribution with parameter
-     * δ : p(1|Hb) = δ.
+     * delta : p(1|Hb) = delta.
 
      * epsilon:
-     * The probability p(1|Hg) = ε
-     * that any randomly chosen data point is consistent with a ‘good’ model
-     * is approximated by the fraction of inliers ε among the data
+     * The probability p(1|Hg) = epsilon
+     * that any randomly chosen data point is consistent with a 'good' model
+     * is approximated by the fraction of inliers epsilon among the data
      * points
 
      * A is the decision threshold, the only parameter of the Adapted SPRT
@@ -571,11 +571,11 @@ namespace Utils {
      * @points is matrix N x 4.
      * @norm_points is output matrix N x 4 with calibrated points.
      */
-    void calibratePoints (const Mat &K1, const Mat &K2, const Mat &points, Mat &norm_points);
-    void calibrateAndNormalizePointsPnP (const Mat &K, const Mat &pts, Mat &calib_norm_pts);
-    void normalizeAndDecalibPointsPnP (const Mat &K, Mat &pts, Mat &calib_norm_pts);
-    void decomposeProjection (const Mat &P, Mat &K_, Mat &R, Mat &t, bool same_focal=false);
-    double getCalibratedThreshold (double threshold, const Mat &K1, const Mat &K2);
+    void calibratePoints (const Matx33d &K1, const Matx33d &K2, const Mat &points, Mat &norm_points);
+    void calibrateAndNormalizePointsPnP (const Matx33d &K, const Mat &pts, Mat &calib_norm_pts);
+    void normalizeAndDecalibPointsPnP (const Matx33d &K, Mat &pts, Mat &calib_norm_pts);
+    void decomposeProjection (const Mat &P, Matx33d &K_, Mat &R, Mat &t, bool same_focal=false);
+    double getCalibratedThreshold (double threshold, const Matx33d &K1, const Matx33d &K2);
     float findMedian (std::vector<float> &array);
 }
 namespace Math {
@@ -801,7 +801,8 @@ bool solvePnPRansac( InputArray objectPoints, InputArray imagePoints,
 Mat findEssentialMat( InputArray points1, InputArray points2,
                       InputArray cameraMatrix1,
                       int method, double prob,
-                      double threshold, OutputArray mask);
+                      double threshold, OutputArray mask,
+                      int maxIters);
 
 Mat estimateAffine2D(InputArray from, InputArray to, OutputArray inliers,
      int method, double ransacReprojThreshold, int maxIters,

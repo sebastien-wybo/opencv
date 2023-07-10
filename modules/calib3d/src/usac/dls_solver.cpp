@@ -49,13 +49,14 @@ namespace cv { namespace usac {
 // This is the estimator class for estimating a homography matrix between two images. A model estimation method and error calculation method are implemented
 class DLSPnPImpl : public DLSPnP {
 private:
-    const Mat * points_mat, * calib_norm_points_mat, * K_mat;
+    const Mat * points_mat, * calib_norm_points_mat;
+    const Matx33d * K_mat;
 #if defined(HAVE_LAPACK) || defined(HAVE_EIGEN)
-    const Mat &K;
+    const Matx33d &K;
     const float * const calib_norm_points, * const points;
 #endif
 public:
-    explicit DLSPnPImpl (const Mat &points_, const Mat &calib_norm_points_, const Mat &K_) :
+    explicit DLSPnPImpl (const Mat &points_, const Mat &calib_norm_points_, const Matx33d &K_) :
         points_mat(&points_), calib_norm_points_mat(&calib_norm_points_), K_mat (&K_)
 #if defined(HAVE_LAPACK) || defined(HAVE_EIGEN)
         , K(K_), calib_norm_points((float*)calib_norm_points_.data), points((float*)points_.data)
@@ -159,7 +160,7 @@ public:
         double wr[27], wi[27] = {0}; // 27 = mat_order
         std::vector<double> work(lwork), eig_vecs(729);
         char jobvl = 'N', jobvr = 'V'; // only left eigen vectors are computed
-        dgeev_(&jobvl, &jobvr, &mat_order, (double*)solution_polynomial.data, &lda, wr, wi, nullptr, &ldvl,
+        OCV_LAPACK_FUNC(dgeev)(&jobvl, &jobvr, &mat_order, (double*)solution_polynomial.data, &lda, wr, wi, nullptr, &ldvl,
                &eig_vecs[0], &ldvr, &work[0], &lwork, &info);
         if (info != 0) return 0;
 #endif
@@ -870,7 +871,7 @@ protected:
                  2 * D[74] - 2 * D[78]);                              // s1^3
     }
 };
-Ptr<DLSPnP> DLSPnP::create(const Mat &points_, const Mat &calib_norm_pts, const Mat &K) {
+Ptr<DLSPnP> DLSPnP::create(const Mat &points_, const Mat &calib_norm_pts, const Matx33d &K) {
     return makePtr<DLSPnPImpl>(points_, calib_norm_pts, K);
 }
 }}

@@ -35,6 +35,10 @@ TEST_P(videoio_gstreamer, read_check)
 
         cvtColor(decode_frame, rgb_frame, convertToRGB);
         cvtColor(rgb_frame, gray_frame, COLOR_RGB2GRAY);
+        if (gray_frame.depth() == CV_16U)
+        {
+            gray_frame.convertTo(gray_frame, CV_8U, 255.0/65535);
+        }
 
         vector<Vec3f> circles;
         HoughCircles(gray_frame, circles, HOUGH_GRADIENT, 1, gray_frame.rows/16, 100, 30, 1, 30 );
@@ -58,6 +62,10 @@ TEST_P(videoio_gstreamer, read_check)
 
 static const Param test_data[] = {
     make_tuple("video/x-raw, format=BGR"  , Size(640, 480), Size(640, 480), COLOR_BGR2RGB),
+    make_tuple("video/x-raw, format=BGRA" , Size(640, 480), Size(640, 480), COLOR_BGRA2RGB),
+    make_tuple("video/x-raw, format=RGBA" , Size(640, 480), Size(640, 480), COLOR_RGBA2RGB),
+    make_tuple("video/x-raw, format=BGRx" , Size(640, 480), Size(640, 480), COLOR_BGRA2RGB),
+    make_tuple("video/x-raw, format=RGBx" , Size(640, 480), Size(640, 480), COLOR_RGBA2RGB),
     make_tuple("video/x-raw, format=GRAY8", Size(640, 480), Size(640, 480), COLOR_GRAY2RGB),
     make_tuple("video/x-raw, format=UYVY" , Size(640, 480), Size(640, 480), COLOR_YUV2RGB_UYVY),
     make_tuple("video/x-raw, format=YUY2" , Size(640, 480), Size(640, 480), COLOR_YUV2RGB_YUY2),
@@ -76,6 +84,10 @@ static const Param test_data[] = {
     make_tuple("video/x-raw, format=NV21" , Size(322, 242), Size(322, 363), COLOR_YUV2RGB_NV21),
     make_tuple("video/x-raw, format=YV12" , Size(322, 242), Size(322, 363), COLOR_YUV2RGB_YV12),
     make_tuple("video/x-raw, format=I420" , Size(322, 242), Size(322, 363), COLOR_YUV2RGB_I420),
+
+    // 16 bit
+    make_tuple("video/x-raw, format=GRAY16_LE", Size(640, 480), Size(640, 480), COLOR_GRAY2RGB),
+    make_tuple("video/x-raw, format=GRAY16_BE", Size(640, 480), Size(640, 480), COLOR_GRAY2RGB),
 };
 
 INSTANTIATE_TEST_CASE_P(videoio, videoio_gstreamer, testing::ValuesIn(test_data));
@@ -137,6 +149,33 @@ TEST(videoio_gstreamer, gray16_writing)
 
     // remove temp file
     EXPECT_EQ(0, remove(temp_file.c_str()));
+}
+
+TEST(videoio_gstreamer, timeout_property)
+{
+    if (!videoio_registry::hasBackend(CAP_GSTREAMER))
+        throw SkipTestException("GStreamer backend was not found");
+
+    VideoCapture cap;
+    cap.open("videotestsrc ! appsink", CAP_GSTREAMER);
+    ASSERT_TRUE(cap.isOpened());
+    const double default_timeout = 30000; // 30 seconds
+    const double open_timeout = 5678; // 3 seconds
+    const double read_timeout = 1234; // 1 second
+    EXPECT_NEAR(default_timeout, cap.get(CAP_PROP_OPEN_TIMEOUT_MSEC), 1e-3);
+    const double current_read_timeout = cap.get(CAP_PROP_READ_TIMEOUT_MSEC);
+    const bool read_timeout_supported = current_read_timeout > 0.0;
+    if (read_timeout_supported)
+    {
+        EXPECT_NEAR(default_timeout, current_read_timeout, 1e-3);
+    }
+    cap.set(CAP_PROP_OPEN_TIMEOUT_MSEC, open_timeout);
+    EXPECT_NEAR(open_timeout, cap.get(CAP_PROP_OPEN_TIMEOUT_MSEC), 1e-3);
+    if (read_timeout_supported)
+    {
+        cap.set(CAP_PROP_READ_TIMEOUT_MSEC, read_timeout);
+        EXPECT_NEAR(read_timeout, cap.get(CAP_PROP_READ_TIMEOUT_MSEC), 1e-3);
+    }
 }
 
 }} // namespace

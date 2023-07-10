@@ -18,7 +18,8 @@
 #include "opencv2/gapi/render/render_types.hpp"
 #include "opencv2/gapi/s11n.hpp" // basic interfaces
 
-#if (defined _WIN32 || defined _WIN64) && defined _MSC_VER
+#if defined _MSC_VER
+#pragma warning(push)
 #pragma warning(disable: 4702)
 #endif
 
@@ -31,6 +32,9 @@ struct GSerialized {
     std::vector<cv::gimpl::Data> m_datas;
     cv::gimpl::DataObjectCounter m_counter;
     cv::gimpl::Protocol m_proto;
+
+    using data_tag_t = uint64_t;
+    std::map<data_tag_t, cv::gimpl::ConstValue> m_const_datas;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -97,6 +101,9 @@ GAPI_EXPORTS IIStream& operator>> (IIStream& is,       cv::gimpl::Op &op);
 GAPI_EXPORTS IOStream& operator<< (IOStream& os, const cv::gimpl::Data &op);
 GAPI_EXPORTS IIStream& operator>> (IIStream& is,       cv::gimpl::Data &op);
 
+GAPI_EXPORTS IOStream& operator<< (IOStream& os, const cv::gimpl::ConstValue &cd);
+GAPI_EXPORTS IIStream& operator>> (IIStream& os, cv::gimpl::ConstValue &cd);
+
 // Render types ////////////////////////////////////////////////////////////////
 
 GAPI_EXPORTS IOStream& operator<< (IOStream& os, const cv::gapi::wip::draw::Text &t);
@@ -158,7 +165,7 @@ GAPI_EXPORTS void serialize( IOStream& os
 GAPI_EXPORTS GSerialized deserialize(IIStream& is);
 GAPI_EXPORTS void reconstruct(const GSerialized &s, ade::Graph &g);
 
-// FIXME: Basic Stream implementaions //////////////////////////////////////////
+// FIXME: Basic Stream implementations /////////////////////////////////////////
 
 // Basic in-memory stream implementations.
 class GAPI_EXPORTS ByteMemoryOutStream final: public IOStream {
@@ -225,5 +232,9 @@ GAPI_EXPORTS std::vector<std::string> vector_of_strings_deserialize(IIStream& is
 } // namespace s11n
 } // namespace gapi
 } // namespace cv
+
+#if defined _MSC_VER
+#pragma warning(pop)
+#endif
 
 #endif // OPENCV_GAPI_COMMON_SERIALIZATION_HPP

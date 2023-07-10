@@ -9,7 +9,13 @@ import io
 from shutil import copyfile
 from pprint import pformat
 from string import Template
-from distutils.dir_util import copy_tree
+
+if sys.version_info >= (3, 8): # Python 3.8+
+    from shutil import copytree
+    def copy_tree(src, dst):
+        copytree(src, dst, dirs_exist_ok=True)
+else:
+    from distutils.dir_util import copy_tree
 
 try:
     from io import StringIO # Python 3
@@ -75,6 +81,9 @@ ManualFuncs = {}
 
 # { class : { func : { arg_name : {"ctype" : ctype, "attrib" : [attrib]} } } }
 func_arg_fix = {}
+
+# { class : { func : { prolog : "", epilog : "" } } }
+header_fix = {}
 
 # { class : { enum: fixed_enum } }
 enum_fix = {}
@@ -194,6 +203,7 @@ class ConstInfo(GeneralInfo):
     def __init__(self, decl, addedManually=False, namespaces=[], enumType=None):
         GeneralInfo.__init__(self, "const", decl, namespaces)
         self.cname = get_cname(self.name)
+        self.swift_name = None
         self.value = decl[1]
         self.enumType = enumType
         self.addedManually = addedManually
@@ -473,6 +483,9 @@ class FuncInfo(GeneralInfo):
         self.ctype = re.sub(r"^CvTermCriteria", "TermCriteria", decl[1] or "")
         self.args = []
         func_fix_map = func_arg_fix.get(self.classname or module, {}).get(self.objc_name, {})
+        header_fixes = header_fix.get(self.classname or module, {}).get(self.objc_name, {})
+        self.prolog = header_fixes.get('prolog', None)
+        self.epilog = header_fixes.get('epilog', None)
         for a in decl[3]:
             arg = a[:]
             arg_fix_map = func_fix_map.get(arg[1], {})
@@ -768,14 +781,27 @@ class ObjectiveCWrapperGenerator(object):
             logging.info('ignored: %s', constinfo)
         else:
             objc_type = enumType.rsplit(".", 1)[-1] if enumType else ""
-            if constinfo.classname in const_fix and objc_type in const_fix[constinfo.classname] and constinfo.name in const_fix[constinfo.classname][objc_type]:
-                fixed_const = const_fix[constinfo.classname][objc_type][constinfo.name]
-                constinfo.name = fixed_const
-                constinfo.cname = fixed_const
+            if constinfo.enumType and constinfo.classpath:
+                new_name = constinfo.classname + '_' + constinfo.name
+                const_fix.setdefault(constinfo.classpath, {}).setdefault(objc_type, {})[constinfo.name] = new_name
+                constinfo.swift_name = constinfo.name
+                constinfo.name = new_name
+                logging.info('use outer class prefix: %s', constinfo)
+
+            if constinfo.classpath in const_fix and objc_type in const_fix[constinfo.classpath]:
+                fixed_consts = const_fix[constinfo.classpath][objc_type]
+                if constinfo.name in fixed_consts:
+                    fixed_const = fixed_consts[constinfo.name]
+                    constinfo.name = fixed_const
+                    constinfo.cname = fixed_const
+                if constinfo.value in fixed_consts:
+                    constinfo.value = fixed_consts[constinfo.value]
 
             if not self.isWrapped(constinfo.classname):
                 logging.info('class not found: %s', constinfo)
-                constinfo.name = constinfo.classname + '_' + constinfo.name
+                if not constinfo.name.startswith(constinfo.classname + "_"):
+                    constinfo.swift_name = constinfo.name
+                    constinfo.name = constinfo.classname + '_' + constinfo.name
                 constinfo.classname = ''
 
             ci = self.getClass(constinfo.classname)
@@ -1164,6 +1190,9 @@ class ObjectiveCWrapperGenerator(object):
                     objc_name = fi.objc_name if not constructor else ("init" + ("With" + (args[0].name[0].upper() + args[0].name[1:]) if len(args) > 0 else ""))
                 )
 
+            if fi.prolog is not None:
+                method_declarations.write("\n%s\n\n" % fi.prolog)
+
             method_declarations.write( Template(
 """$prototype$swift_name$deprecation_decl;
 
@@ -1174,6 +1203,9 @@ class ObjectiveCWrapperGenerator(object):
                     deprecation_decl = " DEPRECATED_ATTRIBUTE" if fi.deprecated else ""
                 )
             )
+
+            if fi.epilog is not None:
+                method_declarations.write("%s\n\n" % fi.epilog)
 
             method_implementations.write( Template(
 """$prototype {$prologue
@@ -1276,7 +1308,9 @@ $unrefined_call$epilogue$ret
                     ci.enum_declarations.write("""
 // C++: enum {1} ({2})
 typedef NS_ENUM(int, {1}) {{
-    {0}\n}};\n\n""".format(",\n    ".join(["%s = %s" % (c.name, c.value) for c in consts]), typeNameShort, typeName)
+    {0}\n}};\n\n""".format(
+                        ",\n    ".join(["%s = %s" % (c.name + (" NS_SWIFT_NAME(" + c.swift_name + ")" if c.swift_name else ""), c.value) for c in consts]),
+                        typeNameShort, typeName)
                     )
                 else:
                     if not wrote_consts_pragma:
@@ -1640,6 +1674,7 @@ if __name__ == "__main__":
             AdditionalImports[module] = gen_type_dict.get("AdditionalImports", {})
             ManualFuncs.update(gen_type_dict.get("ManualFuncs", {}))
             func_arg_fix.update(gen_type_dict.get("func_arg_fix", {}))
+            header_fix.update(gen_type_dict.get("header_fix", {}))
             enum_fix.update(gen_type_dict.get("enum_fix", {}))
             const_fix.update(gen_type_dict.get("const_fix", {}))
             namespaces_dict.update(gen_type_dict.get("namespaces_dict", {}))

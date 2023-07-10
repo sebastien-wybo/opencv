@@ -12,6 +12,9 @@
 #endif
 
 #ifdef HAVE_TBB
+#ifndef TBB_SUPPRESS_DEPRECATED_MESSAGES
+#define TBB_SUPPRESS_DEPRECATED_MESSAGES 1
+#endif
 #include <tbb/tbb.h>
 #include <tbb/task.h>
 #if TBB_INTERFACE_VERSION < 12000
@@ -83,8 +86,8 @@ struct tile_node {
 
     std::vector<tile_node*>                         dependants;
 
-    tile_node(decltype(sync_task_body::body)&& f) : task_body(sync_task_body{std::move(f)}) {};
-    tile_node(async_tag, decltype(async_task_body::body)&& f) : task_body(async_task_body{std::move(f)}) {};
+    tile_node(decltype(sync_task_body::body)&& f) : task_body(sync_task_body{std::move(f)}) {}
+    tile_node(async_tag, decltype(async_task_body::body)&& f) : task_body(async_task_body{std::move(f)}) {}
 };
 
 std::ostream& operator<<(std::ostream& o, tile_node const& n);

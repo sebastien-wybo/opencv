@@ -19,14 +19,14 @@
 // GStreamingCompiled private implementation ///////////////////////////////////
 void cv::GStreamingCompiled::Priv::setup(const GMetaArgs &_metaArgs,
                                          const GMetaArgs &_outMetas,
-                                         std::unique_ptr<cv::gimpl::GStreamingExecutor> &&_pE)
+                                         std::unique_ptr<cv::gimpl::GAbstractStreamingExecutor> &&_pE)
 {
     m_metas    = _metaArgs;
     m_outMetas = _outMetas;
     m_exec     = std::move(_pE);
 }
 
-void cv::GStreamingCompiled::Priv::setup(std::unique_ptr<cv::gimpl::GStreamingExecutor> &&_pE)
+void cv::GStreamingCompiled::Priv::setup(std::unique_ptr<cv::gimpl::GAbstractStreamingExecutor> &&_pE)
 {
     m_exec = std::move(_pE);
 }
@@ -73,6 +73,11 @@ bool cv::GStreamingCompiled::Priv::pull(cv::GRunArgsP &&outs)
 bool cv::GStreamingCompiled::Priv::pull(cv::GOptRunArgsP &&outs)
 {
     return m_exec->pull(std::move(outs));
+}
+
+std::tuple<bool, cv::util::variant<cv::GRunArgs, cv::GOptRunArgs>> cv::GStreamingCompiled::Priv::pull()
+{
+    return m_exec->pull();
 }
 
 bool cv::GStreamingCompiled::Priv::try_pull(cv::GRunArgsP &&outs)
@@ -123,18 +128,9 @@ bool cv::GStreamingCompiled::pull(cv::GRunArgsP &&outs)
     return m_priv->pull(std::move(outs));
 }
 
-std::tuple<bool, cv::GRunArgs> cv::GStreamingCompiled::pull()
+std::tuple<bool, cv::util::variant<cv::GRunArgs, cv::GOptRunArgs>> cv::GStreamingCompiled::pull()
 {
-    GRunArgs run_args;
-    GRunArgsP outs;
-    const auto& out_info = m_priv->outInfo();
-    run_args.reserve(out_info.size());
-    outs.reserve(out_info.size());
-
-    cv::detail::constructGraphOutputs(m_priv->outInfo(), run_args, outs);
-
-    bool is_over = m_priv->pull(std::move(outs));
-    return std::make_tuple(is_over, run_args);
+    return m_priv->pull();
 }
 
 bool cv::GStreamingCompiled::pull(cv::GOptRunArgsP &&outs)

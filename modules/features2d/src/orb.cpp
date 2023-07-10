@@ -131,12 +131,17 @@ static void
 HarrisResponses(const Mat& img, const std::vector<Rect>& layerinfo,
                 std::vector<KeyPoint>& pts, int blockSize, float harris_k)
 {
-    CV_Assert( img.type() == CV_8UC1 && blockSize*blockSize <= 2048 );
+    CV_CheckTypeEQ(img.type(), CV_8UC1, "");
+    CV_CheckGT(blockSize, 0, "");
+    CV_CheckLE(blockSize*blockSize, 2048, "");
 
     size_t ptidx, ptsize = pts.size();
 
     const uchar* ptr00 = img.ptr<uchar>();
-    int step = (int)(img.step/img.elemSize1());
+    size_t size_t_step = img.step;
+    CV_CheckLE(size_t_step * blockSize + blockSize + 1, (size_t)INT_MAX, "");  // ofs computation, step+1
+    int step = static_cast<int>(size_t_step);
+
     int r = blockSize/2;
 
     float scale = 1.f/((1 << 2) * blockSize * 255.f);
@@ -154,7 +159,7 @@ HarrisResponses(const Mat& img, const std::vector<Rect>& layerinfo,
         int y0 = cvRound(pts[ptidx].pt.y);
         int z = pts[ptidx].octave;
 
-        const uchar* ptr0 = ptr00 + (y0 - r + layerinfo[z].y)*step + x0 - r + layerinfo[z].x;
+        const uchar* ptr0 = ptr00 + (y0 - r + layerinfo[z].y)*size_t_step + (x0 - r + layerinfo[z].x);
         int a = 0, b = 0, c = 0;
 
         for( int k = 0; k < blockSize*blockSize; k++ )
@@ -661,6 +666,9 @@ public:
         scoreType(_scoreType), patchSize(_patchSize), fastThreshold(_fastThreshold)
     {}
 
+    void read( const FileNode& fn) CV_OVERRIDE;
+    void write( FileStorage& fs) const CV_OVERRIDE;
+
     void setMaxFeatures(int maxFeatures) CV_OVERRIDE { nfeatures = maxFeatures; }
     int getMaxFeatures() const CV_OVERRIDE { return nfeatures; }
 
@@ -711,6 +719,45 @@ protected:
     int patchSize;
     int fastThreshold;
 };
+
+void ORB_Impl::read( const FileNode& fn)
+{
+  // if node is empty, keep previous value
+  if (!fn["nfeatures"].empty())
+    fn["nfeatures"] >> nfeatures;
+  if (!fn["scaleFactor"].empty())
+    fn["scaleFactor"] >> scaleFactor;
+  if (!fn["nlevels"].empty())
+    fn["nlevels"] >> nlevels;
+  if (!fn["edgeThreshold"].empty())
+    fn["edgeThreshold"] >> edgeThreshold;
+  if (!fn["firstLevel"].empty())
+    fn["firstLevel"] >> firstLevel;
+  if (!fn["wta_k"].empty())
+    fn["wta_k"] >> wta_k;
+  if (!fn["scoreType"].empty())
+    fn["scoreType"] >> scoreType;
+  if (!fn["patchSize"].empty())
+    fn["patchSize"] >> patchSize;
+  if (!fn["fastThreshold"].empty())
+    fn["fastThreshold"] >> fastThreshold;
+}
+void ORB_Impl::write( FileStorage& fs) const
+{
+  if(fs.isOpened())
+  {
+    fs << "name" << getDefaultName();
+    fs << "nfeatures" << nfeatures;
+    fs << "scaleFactor" << scaleFactor;
+    fs << "nlevels" << nlevels;
+    fs << "edgeThreshold" << edgeThreshold;
+    fs << "firstLevel" << firstLevel;
+    fs << "wta_k" << wta_k;
+    fs << "scoreType" << scoreType;
+    fs << "patchSize" << patchSize;
+    fs << "fastThreshold" << fastThreshold;
+  }
+}
 
 int ORB_Impl::descriptorSize() const
 {

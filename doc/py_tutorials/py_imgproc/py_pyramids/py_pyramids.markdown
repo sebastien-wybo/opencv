@@ -31,6 +31,7 @@ Similarly while expanding, area becomes 4 times in each level. We can find Gauss
 **cv.pyrDown()** and **cv.pyrUp()** functions.
 @code{.py}
 img = cv.imread('messi5.jpg')
+assert img is not None, "file could not be read, check with os.path.exists()"
 lower_reso = cv.pyrDown(higher_reso)
 @endcode
 Below is the 4 levels in an image pyramid.
@@ -84,6 +85,8 @@ import numpy as np,sys
 
 A = cv.imread('apple.jpg')
 B = cv.imread('orange.jpg')
+assert A is not None, "file could not be read, check with os.path.exists()"
+assert B is not None, "file could not be read, check with os.path.exists()"
 
 # generate Gaussian pyramid for A
 G = A.copy()
@@ -117,7 +120,7 @@ for i in range(5,0,-1):
 LS = []
 for la,lb in zip(lpA,lpB):
     rows,cols,dpt = la.shape
-    ls = np.hstack((la[:,0:cols/2], lb[:,cols/2:]))
+    ls = np.hstack((la[:,0:cols//2], lb[:,cols//2:]))
     LS.append(ls)
 
 # now reconstruct
@@ -127,7 +130,7 @@ for i in range(1,6):
     ls_ = cv.add(ls_, LS[i])
 
 # image with direct connecting each half
-real = np.hstack((A[:,:cols/2],B[:,cols/2:]))
+real = np.hstack((A[:,:cols//2],B[:,cols//2:]))
 
 cv.imwrite('Pyramid_blending2.jpg',ls_)
 cv.imwrite('Direct_blending.jpg',real)

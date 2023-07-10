@@ -102,7 +102,6 @@ void CV_ImgWarpBaseTest::get_test_array_types_and_sizes( int test_case_idx,
     int cn = cvtest::randInt(rng) % 3 + 1;
     cvtest::ArrayTest::get_test_array_types_and_sizes( test_case_idx, sizes, types );
     depth = depth == 0 ? CV_8U : depth == 1 ? CV_16U : CV_32F;
-    cn += cn == 2;
 
     types[INPUT][0] = types[INPUT_OUTPUT][0] = types[REF_INPUT_OUTPUT][0] = CV_MAKETYPE(depth, cn);
     if( test_array[INPUT].size() > 1 )
@@ -169,7 +168,7 @@ int CV_ImgWarpBaseTest::prepare_test_case( int test_case_idx )
             }
             break;
         default:
-            assert(0);
+            CV_Assert(0);
         }
 
         /*switch( depth )
@@ -187,7 +186,7 @@ int CV_ImgWarpBaseTest::prepare_test_case( int test_case_idx )
                 ((float*)ptr)[j] = (float)buffer[j];
             break;
         default:
-            assert(0);
+            CV_Assert(0);
         }*/
         cv::Mat src(1, cols*cn, CV_32F, &buffer[0]);
         cv::Mat dst(1, cols*cn, depth, ptr);
@@ -482,7 +481,7 @@ static void test_remap( const Mat& src, Mat& dst, const Mat& mapx, const Mat& ma
                 }
                 break;
             default:
-                assert(0);
+                CV_Assert(0);
             }
         }
     }

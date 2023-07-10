@@ -20,6 +20,7 @@
 #include <opencv2/core/cvdef.h>     // GAPI_EXPORTS
 #include <opencv2/gapi/gkernel.hpp> // GKernelPackage
 #include <opencv2/gapi/infer.hpp>   // Generic
+#include <opencv2/gapi/streaming/onevpl/accel_types.hpp> // Preproc Dev & Ctx
 
 namespace cv {
 namespace gapi {
@@ -51,6 +52,8 @@ enum class TraitAs: int
 
 using IEConfig = std::map<std::string, std::string>;
 
+enum InferMode {Sync, Async};
+
 namespace detail {
 struct ParamDesc {
     std::string model_path;
@@ -74,7 +77,33 @@ struct ParamDesc {
     std::map<std::string, std::vector<std::size_t>> reshape_table;
     std::unordered_set<std::string> layer_names_to_reshape;
 
+    // NB: Number of asyncrhonious infer requests
     size_t nireq;
+
+    // NB: An optional config to setup RemoteContext for IE
+    cv::util::any context_config;
+
+    // NB: batch_size can't be equal to 1 by default, because some of models
+    // have 2D (Layout::NC) input and if the first dimension not equal to 1
+    // net.setBatchSize(1) will overwrite it.
+    cv::optional<size_t> batch_size;
+
+    cv::optional<cv::gapi::wip::onevpl::Device> vpl_preproc_device;
+    cv::optional<cv::gapi::wip::onevpl::Context> vpl_preproc_ctx;
+
+    InferMode mode;
+
+    using PrecisionT = int;
+    using PrecisionMapT = std::unordered_map<std::string, PrecisionT>;
+    // NB: This parameter can contain:
+    // 1. cv::util::monostate - Don't specify precision, but use default from IR/Blob.
+    // 2. PrecisionT (CV_8U, CV_32F, ...) - Specifies precision for all output layers.
+    // 3. PrecisionMapT ({{"layer0", CV_32F}, {"layer1", CV_16F}} - Specifies precision for certain output layer.
+    // cv::util::monostate is default value that means precision wasn't specified.
+    using PrecisionVariantT = cv::util::variant<cv::util::monostate,
+                                                PrecisionT,
+                                                PrecisionMapT>;
+    PrecisionVariantT output_precision;
 };
 } // namespace detail
 
@@ -115,7 +144,13 @@ public:
               , {}
               , {}
               , {}
-              , 1u} {
+              , 1u
+              , {}
+              , {}
+              , {}
+              , {}
+              , InferMode::Async
+              , {} } {
     };
 
     /** @overload
@@ -135,7 +170,13 @@ public:
               , {}
               , {}
               , {}
-              , 1u} {
+              , 1u
+              , {}
+              , {}
+              , {}
+              , {}
+              , InferMode::Async
+              , {} } {
     };
 
     /** @brief Specifies sequence of network input layers names for inference.
@@ -217,6 +258,30 @@ public:
         return *this;
     }
 
+    /** @brief Specifies configuration for RemoteContext in InferenceEngine.
+
+    When RemoteContext is configured the backend imports the networks using the context.
+    It also expects cv::MediaFrames to be actually remote, to operate with blobs via the context.
+
+    @param ctx_cfg cv::util::any value which holds InferenceEngine::ParamMap.
+    @return reference to this parameter structure.
+    */
+    Params& cfgContextParams(const cv::util::any& ctx_cfg) {
+        desc.context_config = ctx_cfg;
+        return *this;
+    }
+
+    /** @overload
+    Function with an rvalue parameter.
+
+    @param ctx_cfg cv::util::any value which holds InferenceEngine::ParamMap.
+    @return reference to this parameter structure.
+    */
+    Params& cfgContextParams(cv::util::any&& ctx_cfg) {
+        desc.context_config = std::move(ctx_cfg);
+        return *this;
+    }
+
     /** @brief Specifies number of asynchronous inference requests.
 
     @param nireq Number of inference asynchronous requests.
@@ -286,6 +351,67 @@ public:
         return *this;
     }
 
+    /** @brief Specifies the inference batch size.
+
+    The function is used to specify inference batch size.
+    Follow https://docs.openvinotoolkit.org/latest/classInferenceEngine_1_1CNNNetwork.html#a8e9d19270a48aab50cb5b1c43eecb8e9 for additional information
+
+    @param size batch size which will be used.
+    @return reference to this parameter structure.
+    */
+    Params<Net>& cfgBatchSize(const size_t size) {
+        desc.batch_size = cv::util::make_optional(size);
+        return *this;
+    }
+
+    Params<Net>& cfgPreprocessingParams(const cv::gapi::wip::onevpl::Device &device,
+                                        const cv::gapi::wip::onevpl::Context &ctx) {
+        desc.vpl_preproc_device = cv::util::make_optional(device);
+        desc.vpl_preproc_ctx = cv::util::make_optional(ctx);
+        return *this;
+    }
+
+    /** @brief Specifies which api will be used to run inference.
+
+    The function is used to specify mode for OpenVINO inference.
+    OpenVINO has two options to run inference:
+    1. Asynchronous (using StartAsync: https://docs.openvino.ai/latest/classInferenceEngine_1_1InferRequest.html#doxid-class-inference-engine-1-1-infer-request-1a405293e8423d82a5b45f642a3bef0d24)
+    2. Synchronous (using Infer: https://docs.openvino.ai/latest/classInferenceEngine_1_1InferRequest.html#doxid-class-inference-engine-1-1-infer-request-1a3391ce30894abde730523e9ca9371ce8)
+    By default asynchronous mode is used.
+
+    @param mode Inference mode which will be used.
+    @return reference to this parameter structure.
+    */
+    Params<Net>& cfgInferMode(InferMode mode) {
+        desc.mode = mode;
+        return *this;
+    }
+
+    /** @brief Specifies the output precision for model.
+
+    The function is used to set an output precision for model.
+
+    @param precision Precision in OpenCV format (CV_8U, CV_32F, ...)
+    will be applied to all output layers.
+    @return reference to this parameter structure.
+    */
+    Params<Net>& cfgOutputPrecision(detail::ParamDesc::PrecisionT precision) {
+        desc.output_precision = precision;
+        return *this;
+    }
+
+    /** @overload
+
+    @param precision_map Map of pairs: name of corresponding output layer
+    and its precision in OpenCV format (CV_8U, CV_32F, ...)
+    @return reference to this parameter structure.
+    */
+    Params<Net>&
+    cfgOutputPrecision(detail::ParamDesc::PrecisionMapT precision_map) {
+        desc.output_precision = precision_map;
+        return *this;
+    }
+
     // BEGIN(G-API's network parametrization API)
     GBackend      backend()    const { return cv::gapi::ie::backend();  }
     std::string   tag()        const { return Net::tag(); }
@@ -318,7 +444,10 @@ public:
            const std::string &model,
            const std::string &weights,
            const std::string &device)
-        : desc{ model, weights, device, {}, {}, {}, 0u, 0u, detail::ParamDesc::Kind::Load, true, {}, {}, {}, 1u}, m_tag(tag) {
+        : desc{ model, weights, device, {}, {}, {}, 0u, 0u,
+                detail::ParamDesc::Kind::Load, true, {}, {}, {}, 1u,
+                {}, {}, {}, {}, InferMode::Async, {} },
+          m_tag(tag) {
     };
 
     /** @overload
@@ -333,7 +462,10 @@ public:
     Params(const std::string &tag,
            const std::string &model,
            const std::string &device)
-        : desc{ model, {}, device, {}, {}, {}, 0u, 0u, detail::ParamDesc::Kind::Import, true, {}, {}, {}, 1u}, m_tag(tag) {
+        : desc{ model, {}, device, {}, {}, {}, 0u, 0u,
+                detail::ParamDesc::Kind::Import, true, {}, {}, {}, 1u,
+                {}, {}, {}, {}, InferMode::Async, {} },
+          m_tag(tag) {
     };
 
     /** @see ie::Params::pluginConfig. */
@@ -396,6 +528,31 @@ public:
     /** @overload */
     Params& cfgInputReshape(const std::unordered_set<std::string>&layer_names) {
         desc.layer_names_to_reshape = layer_names;
+        return *this;
+    }
+
+    /** @see ie::Params::cfgBatchSize */
+    Params& cfgBatchSize(const size_t size) {
+        desc.batch_size = cv::util::make_optional(size);
+        return *this;
+    }
+
+    /** @see ie::Params::cfgInferAPI */
+    Params& cfgInferMode(InferMode mode) {
+        desc.mode = mode;
+        return *this;
+    }
+
+    /** @see ie::Params::cfgOutputPrecision */
+    Params& cfgOutputPrecision(detail::ParamDesc::PrecisionT precision) {
+        desc.output_precision = precision;
+        return *this;
+    }
+
+    /** @overload */
+    Params&
+    cfgOutputPrecision(detail::ParamDesc::PrecisionMapT precision_map) {
+        desc.output_precision = precision_map;
         return *this;
     }
 

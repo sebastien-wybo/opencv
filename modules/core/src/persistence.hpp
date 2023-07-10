@@ -86,8 +86,8 @@ namespace fs
 {
 int strcasecmp(const char* str1, const char* str2);
 char* itoa( int _val, char* buffer, int /*radix*/ );
-char* floatToString( char* buf, float value, bool halfprecision, bool explicitZero );
-char* doubleToString( char* buf, double value, bool explicitZero );
+char* floatToString( char* buf, size_t bufSize, float value, bool halfprecision, bool explicitZero );
+char* doubleToString( char* buf, size_t bufSize, double value, bool explicitZero );
 
 int calcStructSize( const char* dt, int initial_size );
 int calcElemSize( const char* dt, int initial_size );
@@ -163,6 +163,24 @@ public:
     CV_NORETURN
     virtual void parseError(const char* funcname, const std::string& msg,
                             const char* filename, int lineno) = 0;
+
+private:
+    enum Base64State{
+        Uncertain,
+        NotUse,
+        InUse,
+    };
+
+    friend class cv::FileStorage::Impl;
+    friend class cv::FileStorage;
+    friend class JSONEmitter;
+    friend class XMLEmitter;
+    friend class YAMLEmitter;
+
+    virtual void check_if_write_struct_is_delayed(bool change_type_to_base64 = false) = 0;
+    virtual void switch_to_Base64_state(Base64State state) = 0;
+    virtual Base64State get_state_of_writing_base64() = 0;
+    virtual int get_space() = 0;
 };
 
 class FileStorageEmitter
